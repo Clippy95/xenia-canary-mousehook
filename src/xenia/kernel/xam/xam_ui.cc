@@ -1015,6 +1015,15 @@ bool xeDrawProfileContent(ui::ImGuiDrawer* imgui_drawer, const uint64_t xuid,
   ImGui::SetCursorPosY(position.y + 2 * ImGui::GetTextLineHeight());
 
   if (user_index != static_cast<uint8_t>(-1)) {
+    const std::string live_enabled = fmt::format(
+        "Xbox Live Enabled: {}", account->IsLiveEnabled() ? "True" : "False");
+
+    ImGui::TextUnformatted(live_enabled.c_str());
+
+    ImGui::SameLine();
+    ImGui::SetCursorPos(position);
+    ImGui::SetCursorPosY(position.y + 3 * ImGui::GetTextLineHeight());
+
     ImGui::TextUnformatted(
         fmt::format("Assigned to slot: {}\n", user_index + 1).c_str());
   } else {
