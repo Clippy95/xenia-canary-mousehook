@@ -11,15 +11,29 @@
 
 #include <cstring>
 
+#include "xenia/base/logging.h"
 #include "xenia/base/platform.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 // #include "xenia/kernel/xnet.h"
 
-#include <xenia/kernel/XLiveAPI.h>
-
-using namespace std::chrono_literals;
+#ifdef XE_PLATFORM_WIN32
+// clang-format off
+#include "xenia/base/platform_win.h"
+#include <WS2tcpip.h>
+#include <WinSock2.h>
+// clang-format on
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+#include <src/xenia/kernel/xam/xam_net.h>
+using namespace xe::kernel::xam;
 
 namespace xe {
 namespace kernel {
@@ -76,26 +90,6 @@ X_STATUS XSocket::GetOption(uint32_t level, uint32_t optname, void* optval_ptr,
                             int* optlen) {
   int ret =
       getsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
-
-  // Because values provided in optval_ptr are in LE we must to somehow save
-  // them in BE.
-  switch (*optlen) {
-    case 1:
-      xe::copy_and_swap<uint8_t>((uint8_t*)optval_ptr, (uint8_t*)optval_ptr, 1);
-      break;
-    case 4:
-      xe::copy_and_swap<uint32_t>((uint32_t*)optval_ptr, (uint32_t*)optval_ptr,
-                                  1);
-      break;
-    case 8:
-      xe::copy_and_swap<uint64_t>((uint64_t*)optval_ptr, (uint64_t*)optval_ptr,
-                                  1);
-      break;
-    default:
-      XELOGE("XSocket::GetOption - Unhandled optlen: {}", *optlen);
-      break;
-  }
-
   if (ret < 0) {
     // TODO: WSAGetLastError()
     return X_STATUS_UNSUCCESSFUL;
@@ -110,17 +104,8 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     return X_STATUS_SUCCESS;
   }
 
-  void* proper_ptr =
-      GetOptValueWithProperEndianness(optval_ptr, optname, optlen);
-
-  int ret = setsockopt(native_handle_, level, optname, (const char*)proper_ptr,
-                       optlen);
-
-  // Cheezy way to check if we created some additional allocation.
-  if (optval_ptr != proper_ptr) {
-    free(proper_ptr);
-  }
-
+  int ret =
+      setsockopt(native_handle_, level, optname, (char*)optval_ptr, optlen);
   if (ret < 0) {
     // TODO: WSAGetLastError()
     return X_STATUS_UNSUCCESSFUL;
@@ -148,14 +133,26 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 #endif
 }
 
-X_STATUS XSocket::Connect(const XSOCKADDR_IN* name, int name_len) {
-  XSOCKADDR_IN sa_in = XSOCKADDR_IN();
-  memcpy(&sa_in, name, sizeof(XSOCKADDR_IN));
+X_STATUS XSocket::Connect(const XSOCKADDR* name, int name_len) {
 
-  sa_in.address_port =
-      XLiveAPI::upnp_handler->GetMappedConnectPort(name->address_port);
 
-  int ret = connect(native_handle_, &sa_in.to_host(), name_len);
+  sockaddr_storage n_name;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(n_name.ss_family);
+  if (name_len > sizeof(n_name) || name_len < family_size) {
+    SetLastWSAError(X_WSAError::X_WSAEFAULT);
+    return X_STATUS_UNSUCCESSFUL;
+  }
+
+  n_name.ss_family = name->address_family;
+  std::memcpy(reinterpret_cast<uint8_t*>(&n_name) + family_size, name->sa_data,
+              name_len - family_size);
+
+  auto addrin = reinterpret_cast<sockaddr_in*>(&n_name);
+
+  addrin->sin_port = htons(GetMappedConnectPort(ntohs(addrin->sin_port)));
+
+  int ret = connect(native_handle_, (const sockaddr*)&n_name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -163,29 +160,30 @@ X_STATUS XSocket::Connect(const XSOCKADDR_IN* name, int name_len) {
   return X_STATUS_SUCCESS;
 }
 
-X_STATUS XSocket::Bind(const XSOCKADDR_IN* name, int name_len) {
-  XSOCKADDR_IN sa_in = XSOCKADDR_IN();
-  memcpy(&sa_in, name, sizeof(XSOCKADDR_IN));
+X_STATUS XSocket::Bind(const XSOCKADDR* name, int name_len) {
+  sockaddr_storage n_name;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(n_name.ss_family);
+  if (name_len > sizeof(n_name) || name_len < family_size) {
+    SetLastWSAError(X_WSAError::X_WSAEFAULT);
+    return X_STATUS_UNSUCCESSFUL;
+  }
 
-  sa_in.address_port =
-      XLiveAPI::upnp_handler->GetMappedBindPort(name->address_port);
+  n_name.ss_family = name->address_family;
+  std::memcpy(reinterpret_cast<uint8_t*>(&n_name) + family_size, name->sa_data,
+              name_len - family_size);
 
-  int ret = bind(native_handle_, &sa_in.to_host(), name_len);
+  auto addrin = reinterpret_cast<sockaddr_in*>(&n_name);
+
+  addrin->sin_port = htons(GetMappedBindPort(ntohs(addrin->sin_port)));
+
+  int ret = bind(native_handle_, (sockaddr*)&n_name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
 
-  bound_port_ = sa_in.address_port;
-
-  if (!bound_port_) {
-    XSOCKADDR_IN sa = *name;
-
-    if (!GetSockName(&sa, &name_len)) {
-      bound_port_ = sa.address_port;
-    }
-  }
-
   bound_ = true;
+  bound_port_ = reinterpret_cast<sockaddr_in*>(&n_name)->sin_port;
 
   return X_STATUS_SUCCESS;
 }
@@ -199,25 +197,38 @@ X_STATUS XSocket::Listen(int backlog) {
   return X_STATUS_SUCCESS;
 }
 
-object_ref<XSocket> XSocket::Accept(XSOCKADDR_IN* name, int* name_len) {
-  sockaddr sa = {};
-  int addrlen = 0;
-  const bool is_name_and_name_len_available = name && name_len;
+object_ref<XSocket> XSocket::Accept(XSOCKADDR* name, int* name_len) {
+  sockaddr_storage n_sockaddr;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(n_sockaddr.ss_family);
+  socklen_t n_name_len = 0;
 
-  if (is_name_and_name_len_available) {
-    addrlen = byte_swap(*name_len);
+  if (name_len) {
+    n_name_len = *name_len;
+    if (n_name_len > sizeof(n_sockaddr) || n_name_len < family_size) {
+      SetLastWSAError(X_WSAError::X_WSAEFAULT);
+      return nullptr;
+    }
   }
 
-  const uint64_t ret = accept(native_handle_, name ? &sa : nullptr,
-                              name_len ? &addrlen : nullptr);
+  uintptr_t ret = accept(native_handle_,
+                         name ? (sockaddr*)&n_sockaddr : nullptr, &n_name_len);
   if (ret == -1) {
+    if (name && name_len) {
+      std::memset((sockaddr*)name, 0, *name_len);
+      *name_len = 0;
+    }
     return nullptr;
   }
 
-  if (is_name_and_name_len_available) {
-    name->to_guest(&sa);
-    *name_len = byte_swap(addrlen);
+  if (name) {
+    name->address_family = n_sockaddr.ss_family;
+    std::memcpy((sockaddr*)name, &n_sockaddr, n_name_len);
   }
+  if (name_len) {
+    *name_len = n_name_len;
+  }
+
   // Create a kernel object to represent the new socket, and copy parameters
   // over.
   auto socket = object_ref<XSocket>(new XSocket(kernel_state_, ret));
@@ -235,18 +246,53 @@ int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
 }
 
 int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
-                      XSOCKADDR_IN* from, uint32_t* from_len) {
-  sockaddr sa{};
+                      XSOCKADDR* from, uint32_t* from_len) {
+  // Pop from secure packets first
+  // TODO(DrChat): Enable when I commit XNet
+  /*
+  {
+    std::lock_guard<std::mutex> lock(incoming_packet_mutex_);
+    if (incoming_packets_.size()) {
+      packet* pkt = (packet*)incoming_packets_.front();
+      int data_len = pkt->data_len;
+      std::memcpy(buf, pkt->data, std::min((uint32_t)pkt->data_len, buf_len));
 
-  if (from) {
-    sa = from->to_host();
+      from->sin_family = 2;
+      from->sin_addr = pkt->src_ip;
+      from->sin_port = pkt->src_port;
+
+      incoming_packets_.pop();
+      uint8_t* pkt_ui8 = (uint8_t*)pkt;
+      delete[] pkt_ui8;
+
+      return data_len;
+    }
+  }
+  */
+
+  sockaddr_storage nfrom;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(nfrom.ss_family);
+  socklen_t nfromlen = 0;
+
+  if (from_len) {
+    nfromlen = *from_len;
+    if (nfromlen > sizeof(nfrom) || nfromlen < family_size) {
+      SetLastWSAError(X_WSAError::X_WSAEFAULT);
+      return -1;
+    }
   }
 
   int ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len,
-                     flags, from ? &sa : nullptr, (int*)from_len);
+                     flags, from ? (sockaddr*)&nfrom : nullptr, &nfromlen);
 
   if (from) {
-    from->to_guest(&sa);
+    from->address_family = nfrom.ss_family;
+    std::memcpy(from->sa_data, reinterpret_cast<uint8_t*>(&nfrom) + family_size,
+                nfromlen - family_size);
+  }
+  if (from_len) {
+    *from_len = nfromlen;
   }
 
   return ret;
@@ -256,7 +302,7 @@ struct WSARecvFromData {
   XWSABUF* buffers;
   uint32_t num_buffers;
   uint32_t flags;
-  XSOCKADDR_IN* from;
+  XSOCKADDR* from;
   xe::be<uint32_t>* from_len;
   XWSAOVERLAPPED* overlapped;
 };
@@ -296,6 +342,21 @@ int XSocket::PollWSARecvFrom(bool wait, WSARecvFromData receive_async_data) {
     goto threadexit;
   }
 
+  sockaddr_storage n_from;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(n_from.ss_family);
+  socklen_t n_from_len = 0;
+
+  if (receive_async_data.from_len) {
+    n_from_len = *receive_async_data.from_len;
+    if (n_from_len > sizeof(n_from) || n_from_len < family_size) {
+      receive_async_data.overlapped->internal_high =
+          (uint32_t)X_WSAError::X_WSAEFAULT;
+      ret = -1;
+      goto threadexit;
+    }
+  }
+
 #ifdef XE_PLATFORM_WIN32
   DWORD bytes_received = 0;
   DWORD flags = receive_async_data.flags;
@@ -310,21 +371,15 @@ int XSocket::PollWSARecvFrom(bool wait, WSARecvFromData receive_async_data) {
 
   {
     std::unique_lock socket_lock(receive_socket_mutex_);
-
-    sockaddr* sa = nullptr;
-    if (receive_async_data.from) {
-      sa = const_cast<sockaddr*>(&receive_async_data.from->to_host());
-    }
-
     ret = ::WSARecvFrom(native_handle_, buffers, receive_async_data.num_buffers,
-                        &bytes_received, &flags, sa,
-                        (LPINT)receive_async_data.from_len, nullptr, nullptr);
+                        &bytes_received, &flags,
+                        receive_async_data.from ? (sockaddr*)&n_from : nullptr,
+                        &n_from_len, nullptr, nullptr);
     if (ret < 0) {
       receive_async_data.overlapped->internal_high = GetLastWSAError();
     } else {
       receive_async_data.overlapped->internal = bytes_received;
     }
-    receive_async_data.from->to_guest(sa);
     socket_lock.unlock();
   }
 
@@ -365,7 +420,18 @@ int XSocket::PollWSARecvFrom(bool wait, WSARecvFromData receive_async_data) {
     ret = 0;
   }
 #endif
+
   delete[] buffers;
+
+  if (receive_async_data.from) {
+    receive_async_data.from->address_family = n_from.ss_family;
+    std::memcpy(receive_async_data.from->sa_data,
+                reinterpret_cast<uint8_t*>(&n_from) + family_size,
+                n_from_len - family_size);
+  }
+  if (receive_async_data.from_len) {
+    *receive_async_data.from_len = n_from_len;
+  }
 
 threadexit:
   std::unique_lock lock(receive_mutex_);
@@ -388,7 +454,7 @@ threadexit:
 
 int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
                          xe::be<uint32_t>* num_bytes_recv_ptr,
-                         xe::be<uint32_t>* flags_ptr, XSOCKADDR_IN* from_ptr,
+                         xe::be<uint32_t>* flags_ptr, XSOCKADDR* from_ptr,
                          xe::be<uint32_t>* fromlen_ptr,
                          XWSAOVERLAPPED* overlapped_ptr) {
   if (!buffers || !flags_ptr || (from_ptr && !fromlen_ptr)) {
@@ -434,17 +500,9 @@ int XSocket::WSARecvFrom(XWSABUF* buffers, uint32_t num_buffers,
           xboxkrnl::xeNtClearEvent(overlapped_ptr->event_handle);
         }
         active_overlapped_ = overlapped_ptr;
-
-        if (!polling_task_.valid()) {
-          polling_task_ =
-              std::async(std::launch::async, &XSocket::PollWSARecvFrom, this,
-                         true, receive_async_data);
-        } else {
-          auto status = polling_task_.wait_for(0ms);
-          if (status == std::future_status::ready) {
-            auto result = polling_task_.get();
-          }
-        }
+        receive_thread_ = std::thread(&XSocket::PollWSARecvFrom, this, true,
+                                      receive_async_data);
+        receive_thread_.detach();
         SetLastWSAError(X_WSAError::X_WSA_IO_PENDING);
       }
 
@@ -469,7 +527,7 @@ bool XSocket::WSAGetOverlappedResult(XWSAOVERLAPPED* overlapped_ptr,
   }
 
   std::unique_lock lock(receive_mutex_);
-  if (overlapped_ptr->internal == STATUS_PENDING) {
+  if (!(overlapped_ptr->offset_high & 1)) {
     if (wait) {
       receive_cv_.wait(lock);
     } else {
@@ -478,12 +536,11 @@ bool XSocket::WSAGetOverlappedResult(XWSAOVERLAPPED* overlapped_ptr,
     }
   }
 
-  // This causes problems somehow -AleBello7276
-  /* if (overlapped_ptr->internal_high != 0) {
+  if (overlapped_ptr->internal_high != 0) {
     SetLastWSAError((X_WSAError)overlapped_ptr->internal_high.get());
     active_overlapped_ = nullptr;
     return false;
-  } */
+  }
 
   *bytes_transferred = overlapped_ptr->internal;
   *flags_ptr = overlapped_ptr->offset;
@@ -499,18 +556,39 @@ int XSocket::Send(const uint8_t* buf, uint32_t buf_len, uint32_t flags) {
 }
 
 int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
-                    XSOCKADDR_IN* to, uint32_t to_len) {
-  to->address_port =
-      XLiveAPI::upnp_handler->GetMappedBindPort(to->address_port);
+                    XSOCKADDR* to, uint32_t to_len) {
+  // Send 2 copies of the packet: One to XNet (for network security) and an
+  // unencrypted copy for other Xenia hosts.
+  // TODO(DrChat): Enable when I commit XNet.
+  /*
+  auto xam = kernel_state()->GetKernelModule<xam::XamModule>("xam.xex");
+  auto xnet = xam->xnet();
+  if (xnet) {
+    xnet->SendPacket(this, to, buf, buf_len);
+  }
+  */
+
+  sockaddr_storage nto;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(nto.ss_family);
+  if (to) {
+    if (to_len > sizeof(nto) || to_len < family_size) {
+      SetLastWSAError(X_WSAError::X_WSAEFAULT);
+      return -1;
+    }
+
+    nto.ss_family = to->address_family;
+    std::memcpy(reinterpret_cast<uint8_t*>(&nto) + family_size, to->sa_data,
+                to_len - family_size);
+
+
+  }
+
+  auto addrin = reinterpret_cast<sockaddr_in*>(&nto);
+  addrin->sin_port = htons(GetMappedBindPort(ntohs(addrin->sin_port)));
 
   return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
-                to ? &to->to_host() : nullptr, to_len);
-}
-
-int XSocket::WSAEventSelect(uint64_t socket_handle, uint64_t event_handle,
-                            uint32_t flags) {
-  return ::WSAEventSelect(socket_handle, reinterpret_cast<HANDLE>(event_handle),
-                          flags);
+                to ? (const sockaddr*)&nto : nullptr, to_len);
 }
 
 bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,
@@ -529,27 +607,43 @@ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,
   return true;
 }
 
-X_STATUS XSocket::GetPeerName(XSOCKADDR_IN* buf, int* buf_len) {
-  sockaddr* sa = const_cast<sockaddr*>(&buf->to_host());
+X_STATUS XSocket::GetPeerName(XSOCKADDR* buf, int* buf_len) {
+  sockaddr_storage sa;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(sa.ss_family);
+  if (*buf_len > sizeof(sa) || *buf_len < family_size) {
+    SetLastWSAError(X_WSAError::X_WSAEFAULT);
+    return X_STATUS_UNSUCCESSFUL;
+  }
 
-  int ret = getpeername(native_handle_, sa, (socklen_t*)buf_len);
+  int ret = getpeername(native_handle_, (sockaddr*)&sa, (socklen_t*)buf_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
 
-  buf->to_guest(sa);
+  buf->address_family = sa.ss_family;
+  std::memcpy(buf->sa_data, reinterpret_cast<uint8_t*>(&sa) + family_size,
+              *buf_len - family_size);
   return X_STATUS_SUCCESS;
 }
 
-X_STATUS XSocket::GetSockName(XSOCKADDR_IN* buf, int* buf_len) {
-  sockaddr* sa = const_cast<sockaddr*>(&buf->to_host());
+X_STATUS XSocket::GetSockName(XSOCKADDR* buf, int* buf_len) {
+  sockaddr_storage sa;
+  auto family_size =
+      offsetof(sockaddr_storage, ss_family) + sizeof(sa.ss_family);
+  if (*buf_len > sizeof(sa) || *buf_len < family_size) {
+    SetLastWSAError(X_WSAError::X_WSAEFAULT);
+    return X_STATUS_UNSUCCESSFUL;
+  }
 
-  int ret = getsockname(native_handle_, sa, (socklen_t*)buf_len);
+  int ret = getsockname(native_handle_, (sockaddr*)&sa, (socklen_t*)buf_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
   }
 
-  buf->to_guest(sa);
+  buf->address_family = sa.ss_family;
+  std::memcpy(buf->sa_data, reinterpret_cast<uint8_t*>(&sa) + family_size,
+              *buf_len - family_size);
   return X_STATUS_SUCCESS;
 }
 
