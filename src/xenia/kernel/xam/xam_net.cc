@@ -24,6 +24,7 @@
 #include "xenia/xbox.h"
 
 #ifdef XE_PLATFORM_WIN32
+#include <random>
 // NOTE: must be included last as it expects windows.h to already be included.
 #define _WINSOCK_DEPRECATED_NO_WARNINGS  // inet_addr
 #include <WS2tcpip.h>                    // NOLINT(build/include_order)
@@ -36,58 +37,52 @@
 #include <netinet/ip.h>
 #include <sys/socket.h>
 #endif
-#include <random>
-#include <third_party/libcurl/include/curl/curl.h>
-#define RAPIDJSON_HAS_STDSTRING 1
-#include <third_party/rapidjson/include/rapidjson/document.h>
-#include <third_party/rapidjson/include/rapidjson/prettywriter.h>
-#include <third_party/rapidjson/include/rapidjson/stringbuffer.h>
 
-using namespace rapidjson;
+#include <xenia/kernel/XLiveAPI.h>
 
-DEFINE_string(api_address, "http://xbl.craftycodie.com", "Xenia Master Server Address", "Live");
+DECLARE_string(api_address);
 
-// TODO: Remove - Codie
-std::size_t callback(const char* in, std::size_t size, std::size_t num,
-                     char* out) {
-  std::string data(in, (std::size_t)size * num);
-  *((std::stringstream*)out) << data;
-  return size * num;
-} 
+DECLARE_bool(logging);
 
-xe::be<uint64_t> MacAddresstoUint64(const unsigned char* macAddress) {
-  int i;
-  xe::be<uint64_t> macAddress64 = 0;
-  for (i = 5; i >= 0; --i) {
-    macAddress64 = macAddress64 << 8;
-    macAddress64 |= (uint64_t)macAddress[5 - i];
-  }
+DECLARE_bool(log_mask_ips);
 
-  return macAddress64;
-}
+DECLARE_bool(offline_mode);
 
-xe::be<uint64_t> SessionIdtoUint64(const unsigned char* sessionID) {
-  int i;
-  xe::be<uint64_t> sessionId64 = 0;
-  for (i = 7; i >= 0; --i) {
-    sessionId64 = sessionId64 << 8;
-    sessionId64 |= (uint64_t)sessionID[7 - i];
-  }
+enum XNET_QOS {
+  LISTEN_ENABLE = 0x01,
+  LISTEN_DISABLE = 0x02,
+  LISTEN_SET_DATA = 0x04,
+  LISTEN_SET_BITSPERSEC = 0x08,
+  XLISTEN_RELEASE = 0x10
+};
 
-  return sessionId64;
-}
+enum XNET_CONNECT {
+  STATUS_IDLE = 0x00,
+  XNET_CONNECT_STATUS_PENDING = 0x01,
+  STATUS_CONNECTED = 0x02,
+  STATUS_LOST = 0x03,
+};
 
-void Uint64toSessionId(xe::be<uint64_t> sessionID, unsigned char* sessionIdOut) {
-  for (int i = 0; i < 8; i++) {
-    sessionIdOut[7-i] = ((sessionID >> (8 * i)) & 0XFF);
-  }
-}
+enum XNET_STARTUP {
+  BYPASS_SECURITY = 0x01,
+  ALLOCATE_MAX_DGRAM_SOCKETS = 0x02,
+  ALLOCATE_MAX_STREAM_SOCKETS = 0x04,
+  DISABLE_PEER_ENCRYPTION = 0x08,
+};
 
-void Uint64toMacAddress(xe::be<uint64_t> macAddress, unsigned char* macAddressOut) {
-  for (int i = 0; i < 6; i++) {
-    macAddressOut[5-i] = ((macAddress >> (8 * i)) & 0XFF);
-  }
-}
+enum XNET_XNQOSINFO {
+  COMPLETE = 0x01,
+  TARGET_CONTACTED = 0x02,
+  TARGET_DISABLED = 0x04,
+  DATA_RECEIVED = 0x08,
+  PARTIAL_COMPLETE = 0x10
+};
+
+// XNetGetBroadcastVersionStatus
+enum VERSION {
+  OLDER = 0x01,
+  NEWER = 0x02,
+};
 
 namespace xe {
 namespace kernel {
@@ -153,6 +148,65 @@ struct X_WSADATA {
   xe::be<uint32_t> vendor_info_ptr;
 };
 
+// https://github.com/joolswills/mameox/blob/master/MAMEoX/Sources/xbox_Network.cpp#L136
+struct XNetStartupParams {
+  uint8_t cfgSizeOfStruct;
+  uint8_t cfgFlags;
+  uint8_t cfgSockMaxDgramSockets;
+  uint8_t cfgSockMaxStreamSockets;
+  uint8_t cfgSockDefaultRecvBufsizeInK;
+  uint8_t cfgSockDefaultSendBufsizeInK;
+  uint8_t cfgKeyRegMax;
+  uint8_t cfgSecRegMax;
+  uint8_t cfgQosDataLimitDiv4;
+  uint8_t cfgQosProbeTimeoutInSeconds;
+  uint8_t cfgQosProbeRetries;
+  uint8_t cfgQosSrvMaxSimultaneousResponses;
+  uint8_t cfgQosPairWaitTimeInSeconds;
+};
+
+struct XnAddrStatus {
+  // Address acquisition is not yet complete
+  static const uint32_t XNET_GET_XNADDR_PENDING = 0x00000000;
+  // XNet is uninitialized or no debugger found
+  static const uint32_t XNET_GET_XNADDR_NONE = 0x00000001;
+  // Host has ethernet address (no IP address)
+  static const uint32_t XNET_GET_XNADDR_ETHERNET = 0x00000002;
+  // Host has statically assigned IP address
+  static const uint32_t XNET_GET_XNADDR_STATIC = 0x00000004;
+  // Host has DHCP assigned IP address
+  static const uint32_t XNET_GET_XNADDR_DHCP = 0x00000008;
+  // Host has PPPoE assigned IP address
+  static const uint32_t XNET_GET_XNADDR_PPPOE = 0x00000010;
+  // Host has one or more gateways configured
+  static const uint32_t XNET_GET_XNADDR_GATEWAY = 0x00000020;
+  // Host has one or more DNS servers configured
+  static const uint32_t XNET_GET_XNADDR_DNS = 0x00000040;
+  // Host is currently connected to online service
+  static const uint32_t XNET_GET_XNADDR_ONLINE = 0x00000080;
+  // Network configuration requires troubleshooting
+  static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
+};
+
+// https://github.com/ILOVEPIE/Cxbx-Reloaded/blob/master/src/CxbxKrnl/EmuXOnline.h#L39
+struct XEthernetStatus {
+  static const uint32_t XNET_ETHERNET_LINK_ACTIVE = 0x01;
+  static const uint32_t XNET_ETHERNET_LINK_100MBPS = 0x02;
+  static const uint32_t XNET_ETHERNET_LINK_10MBPS = 0x04;
+  static const uint32_t XNET_ETHERNET_LINK_FULL_DUPLEX = 0x08;
+  static const uint32_t XNET_ETHERNET_LINK_HALF_DUPLEX = 0x10;
+};
+
+typedef struct {
+  DWORD size_of_struct;
+  DWORD requests_received_count;
+  DWORD probes_received_count;
+  DWORD slots_full_discards_count;
+  DWORD data_replies_sent_count;
+  DWORD data_reply_bytes_sent;
+  DWORD probe_replies_sent_count;
+} XNQOSLISTENSTATS;
+
 void LoadSockaddr(const uint8_t* ptr, sockaddr* out_addr) {
   out_addr->sa_family = xe::load_and_swap<uint16_t>(ptr + 0);
   switch (out_addr->sa_family) {
@@ -188,23 +242,6 @@ void StoreSockaddr(const sockaddr& addr, uint8_t* ptr) {
   }
 }
 
-// https://github.com/joolswills/mameox/blob/master/MAMEoX/Sources/xbox_Network.cpp#L136
-struct XNetStartupParams {
-  uint8_t cfgSizeOfStruct;
-  uint8_t cfgFlags;
-  uint8_t cfgSockMaxDgramSockets;
-  uint8_t cfgSockMaxStreamSockets;
-  uint8_t cfgSockDefaultRecvBufsizeInK;
-  uint8_t cfgSockDefaultSendBufsizeInK;
-  uint8_t cfgKeyRegMax;
-  uint8_t cfgSecRegMax;
-  uint8_t cfgQosDataLimitDiv4;
-  uint8_t cfgQosProbeTimeoutInSeconds;
-  uint8_t cfgQosProbeRetries;
-  uint8_t cfgQosSrvMaxSimultaneousResponses;
-  uint8_t cfgQosPairWaitTimeInSeconds;
-};
-
 XNetStartupParams xnet_startup_params = {0};
 
 dword_result_t NetDll_XNetStartup_entry(dword_t caller,
@@ -212,6 +249,23 @@ dword_result_t NetDll_XNetStartup_entry(dword_t caller,
   if (params) {
     assert_true(params->cfgSizeOfStruct == sizeof(XNetStartupParams));
     std::memcpy(&xnet_startup_params, params, sizeof(XNetStartupParams));
+
+    switch (params->cfgFlags) {
+      case BYPASS_SECURITY:
+        XELOGI("XNetStartup BYPASS_SECURITY");
+        break;
+      case ALLOCATE_MAX_DGRAM_SOCKETS:
+        XELOGI("XNetStartup ALLOCATE_MAX_DGRAM_SOCKETS");
+        break;
+      case ALLOCATE_MAX_STREAM_SOCKETS:
+        XELOGI("XNetStartup ALLOCATE_MAX_STREAM_SOCKETS");
+        break;
+      case DISABLE_PEER_ENCRYPTION:
+        XELOGI("XNetStartup DISABLE_PEER_ENCRYPTION");
+        break;
+      default:
+        break;
+    }
   }
 
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
@@ -248,7 +302,7 @@ dword_result_t NetDll_XNetCleanup_entry(dword_t caller, lpvoid_t params) {
   // TODO: Shut down and delete.
   // delete xnet;
 
-  return 0;
+  return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetCleanup, kNetworking, kImplemented);
 
@@ -276,8 +330,14 @@ dword_result_t NetDll_XNetGetOpt_entry(dword_t one, dword_t option_id,
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetOpt, kNetworking, kSketchy);
 
-dword_result_t NetDll_XNetRandom_entry(dword_t caller, lpvoid_t buffer_ptr,
-                                       dword_t length) {
+// XNetRandom(random_data, random_length)
+void NetDll_XNetRandom(unsigned char* buffer_ptr, uint32_t length) {
+  // if (buffer_ptr) {
+  //     if (length) {
+  //       XeCryptRandom()
+  //     }
+  // }
+
   std::random_device rd;
   std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFFu);
   std::vector<char> data(length);
@@ -285,19 +345,28 @@ dword_result_t NetDll_XNetRandom_entry(dword_t caller, lpvoid_t buffer_ptr,
   uint32_t bits = 0;
 
   for (unsigned int i = 0; i < length; i++) {
-
     if (offset == 0) bits = dist(rd);
-    *(unsigned char*)(buffer_ptr.host_address() + i) = static_cast<unsigned char>(bits & 0xFF);
+    *(unsigned char*)(buffer_ptr + i) = static_cast<unsigned char>(bits & 0xFF);
     bits >>= 8;
     if (++offset >= 4) offset = 0;
   }
+}
 
-  return 0;
+dword_result_t NetDll_XNetRandom_entry(dword_t caller, lpvoid_t buffer_ptr,
+                                       dword_t length) {
+  NetDll_XNetRandom(buffer_ptr, length);
+
+  return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetRandom, kNetworking, kStub);
 
 dword_result_t NetDll_WSAStartup_entry(dword_t caller, word_t version,
                                        pointer_t<X_WSADATA> data_ptr) {
+  // NetDll_WSAStartup is called multiple times?
+  XELOGI("NetDll_WSAStartup");
+
+  XLiveAPI::Init();
+
 // TODO(benvanik): abstraction layer needed.
 #ifdef XE_PLATFORM_WIN32
   WSADATA wsaData;
@@ -470,7 +539,7 @@ dword_result_t NetDll_WSAWaitForMultipleEvents_entry(dword_t num_events,
   X_STATUS result = 0;
   do {
     result = xboxkrnl::xeNtWaitForMultipleObjectsEx(
-        num_events, events, !wait_all, 1, alertable,
+        num_events, events, wait_all, 1, alertable,
         timeout != -1 ? &timeout_wait : nullptr);
   } while (result == X_STATUS_ALERTED);
 
@@ -524,384 +593,38 @@ dword_result_t NetDll_WSASetEvent_entry(dword_t event_handle) {
 }
 DECLARE_XAM_EXPORT1(NetDll_WSASetEvent, kNetworking, kImplemented);
 
-struct XnAddrStatus {
-  // Address acquisition is not yet complete
-  static const uint32_t XNET_GET_XNADDR_PENDING = 0x00000000;
-  // XNet is uninitialized or no debugger found
-  static const uint32_t XNET_GET_XNADDR_NONE = 0x00000001;
-  // Host has ethernet address (no IP address)
-  static const uint32_t XNET_GET_XNADDR_ETHERNET = 0x00000002;
-  // Host has statically assigned IP address
-  static const uint32_t XNET_GET_XNADDR_STATIC = 0x00000004;
-  // Host has DHCP assigned IP address
-  static const uint32_t XNET_GET_XNADDR_DHCP = 0x00000008;
-  // Host has PPPoE assigned IP address
-  static const uint32_t XNET_GET_XNADDR_PPPOE = 0x00000010;
-  // Host has one or more gateways configured
-  static const uint32_t XNET_GET_XNADDR_GATEWAY = 0x00000020;
-  // Host has one or more DNS servers configured
-  static const uint32_t XNET_GET_XNADDR_DNS = 0x00000040;
-  // Host is currently connected to online service
-  static const uint32_t XNET_GET_XNADDR_ONLINE = 0x00000080;
-  // Network configuration requires troubleshooting
-  static const uint32_t XNET_GET_XNADDR_TROUBLESHOOT = 0x00008000;
-};
-
-bool upnp_fetched_ = false;
-in_addr local_ip_ = {};
-in_addr online_ip_ = {};
-unsigned char* macAddress = nullptr;
-
-static void FetchUPnP() {
-  auto sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (sock < 0) {
-    return;
-  }
-
-#pragma region CURL, Refactor Out
-  // TODO Codie
-  // Get the external IP via curl in case upnp fails but the user has port-forwarded.
-
-  CURL* curl;
-  CURLcode res;
-
-      std::stringstream url;
-  url << cvars::api_address << "/whoami";
-
-  std::stringstream out;
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if (curl == NULL) {
-    goto no_curl;
-  }
-
-  struct curl_slist* headers = NULL;
-  headers = curl_slist_append(headers, "Content-Type: application/json");
-  headers = curl_slist_append(headers, "Accept: application/json");
-  headers = curl_slist_append(headers, "charset: utf-8");
-
-
-  curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-
-  res = curl_easy_perform(curl);
-
-  curl_easy_cleanup(curl);
-  int httpCode(0);
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-  curl_global_cleanup();
-
-  if (httpCode == 200) {
-    rapidjson::Document d;
-    d.Parse(out.str());
-
-    online_ip_.S_un.S_addr = inet_addr(d["address"].GetString());
-  }
-no_curl:
-#pragma endregion
-
-
-  sockaddr_in addrin;
-  addrin.sin_family = AF_INET;
-  addrin.sin_port = 65535;
-  addrin.sin_addr.s_addr = inet_addr("1.1.1.1");
-  auto ret = connect(sock, (struct sockaddr*)&addrin, sizeof(addrin));
-  if (ret < 0) {
-    auto err = WSAGetLastError();
-    XELOGE("Failed to reach DNS {:08X}", (uint32_t)err);
-    return;
-  }
-
-  upnp_fetched_ = true;
-
-  int socklen = sizeof(addrin);
-  ret = getsockname(sock, (struct sockaddr*)&addrin, &socklen);
-  if (ret < 0) {
-    return;
-  }
-  local_ip_ = addrin.sin_addr;
-
-  closesocket(sock);
-
-#ifdef XE_PLATFORM_WIN32
-  Microsoft::WRL::ComPtr<IUPnPNAT> nat;
-  HRESULT hr =
-      CoCreateInstance(CLSID_UPnPNAT, NULL, CLSCTX_ALL, IID_PPV_ARGS(&nat));
-  if (FAILED(hr)) {
-    XELOGE("Failed to create UPnP instance: {:08X}", (uint32_t)hr);
-    return;
-  }
-
-  Microsoft::WRL::ComPtr<IStaticPortMappingCollection> staticPortMappings;
-  hr = nat->get_StaticPortMappingCollection(&staticPortMappings);
-  if (FAILED(hr) || staticPortMappings.Get() == nullptr) {
-    XELOGE("Failed to get UPnP port mapping collection: {:08X}", (uint32_t)hr);
-    return;
-  }
-
-  wchar_t local_ip_str[INET_ADDRSTRLEN];
-  InetNtopW(AF_INET, &addrin.sin_addr, local_ip_str, INET_ADDRSTRLEN);
-
-  Microsoft::WRL::ComPtr<IStaticPortMapping> portMapping;
-  hr = staticPortMappings->Add(36000, BSTR{L"UDP"}, 36009,
-                               BSTR{local_ip_str}, VARIANT_TRUE,
-                               BSTR{L"Xenia"}, &portMapping);
-  if (FAILED(hr)) {
-    XELOGE("Failed to create UPnP port mapping: {:08X}", (uint32_t)hr);
-    return;
-  }
-#endif
-}
-
-uint32_t xeXOnlineGetNatType() {
-  if (!upnp_fetched_) {
-    // TODO: this should be done ahead of time.
-    FetchUPnP();
-  }
-
-  // 1 = open, 3 = strict
-  return (online_ip_.s_addr != 0) ? 1 : 3;
-}
-
-
-in_addr getOnlineIp() {
-  return online_ip_;
-}
-
-// TODO: This shouldn't be random and probably doesn't belong in this file. - Codie
-const unsigned char* getMacAddress() { 
-  if (macAddress == nullptr) {
-    macAddress = new unsigned char[6];
-    NetDll_XNetRandom_entry(0, macAddress, 6);
-  }
-  return macAddress;
-}
-
-uint64_t getMachineId() {
-  auto macAddress = getMacAddress();
-
-  uint64_t machineId = 0;
-
-  int i;
-  for (i = 5; i >= 0; --i) {
-    machineId = machineId << 8;
-    machineId |= macAddress[5 - i];
-  }
-
-  machineId += 0xFA00000000000000;
-
-  return machineId;
-}
-
-uint16_t getPort() { return 36000; }
-
-void RegisterPlayer() {
-#pragma region Curl
-  /*
-      TODO:
-          - Refactor the CURL out to a separate class.
-          - Use the overlapped task to do this asyncronously.
-  */
-
-  char str[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &getOnlineIp(), str, INET_ADDRSTRLEN);
-
-  Document d;
-  d.SetObject();
-
-  Document::AllocatorType& allocator = d.GetAllocator();
-
-  size_t sz = allocator.Size();
-
-            std::stringstream macAddressString;
-  macAddressString << std::hex << std::noshowbase << std::setw(12)
-                   << std::setfill('0') << MacAddresstoUint64(getMacAddress());
-
-  char ipString[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &getOnlineIp(), ipString, INET_ADDRSTRLEN);
-
-  std::stringstream machineIdStr;
-  machineIdStr << std::hex << std::noshowbase << std::setw(16)
-               << std::setfill('0') << getMachineId();
-
-  auto xuid = kernel_state()->xam_state()->GetUserProfile((uint32_t)0)->xuid();
-  std::stringstream xuidStr;
-  xuidStr << std::hex << std::noshowbase << std::setw(16)
-               << std::setfill('0') << xuid;
-
-  d.AddMember("xuid", xuidStr.str(), allocator);
-  d.AddMember("machineId", machineIdStr.str(), allocator);
-  d.AddMember("hostAddress", std::string(ipString), allocator);
-  d.AddMember("macAddress", macAddressString.str(), allocator);
-
-  rapidjson::StringBuffer strbuf;
-  PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
-  d.Accept(writer);
-
-  CURL* curl;
-  CURLcode res;
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if (curl == NULL) {
-    return;
-  }
-
-  std::stringstream out;
-
-  struct curl_slist* headers = NULL;
-  headers = curl_slist_append(headers, "Content-Type: application/json");
-  headers = curl_slist_append(headers, "Accept: application/json");
-  headers = curl_slist_append(headers, "charset: utf-8");
-
-  std::stringstream url;
-  url << GetApiAddress() << "/players";
-  curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
-
-  res = curl_easy_perform(curl);
-
-  curl_easy_cleanup(curl);
-  int httpCode(0);
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-  curl_global_cleanup();
-
-#pragma endregion
-}
-
-std::map<uint16_t, uint16_t> mappedConnectPorts{};
-std::map<uint16_t, uint16_t> mappedBindPorts{};
-
-
-uint16_t GetMappedConnectPort(uint16_t port) {
-  if (mappedConnectPorts.find(port) != mappedConnectPorts.end())
-    return mappedConnectPorts[port];
-  else {
-    if (mappedConnectPorts.find(0) != mappedConnectPorts.end())
-      return mappedConnectPorts[0];
-
-    XELOGW("No mapped connect port found for {}!", port);
-    return port;
-  }
-}
-
-uint16_t GetMappedBindPort(uint16_t port) {
-  if (mappedBindPorts.find(port) != mappedBindPorts.end())
-    return mappedBindPorts[port];
-  else {
-    if (mappedBindPorts.find(0) != mappedBindPorts.end())
-      return mappedBindPorts[0];
-
-    XELOGW("No mapped bind port found for {}!", port);
-    return port;
-  }
-}
-
-std::string GetApiAddress() { return cvars::api_address; }
-
-void DownloadPortMappings() {
-#pragma region Curl
-  /*
-      TODO:
-          - Refactor the CURL out to a separate class.
-          - Use the overlapped task to do this asyncronously.
-  */
-  CURL* curl;
-  CURLcode res;
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if (curl == NULL) {
-    return;
-  }
-
-  std::stringstream out;
-
-  struct curl_slist* headers = NULL;
-  headers = curl_slist_append(headers, "Content-Type: application/json");
-  headers = curl_slist_append(headers, "Accept: application/json");
-  headers = curl_slist_append(headers, "charset: utf-8");
-
-  std::stringstream titleId;
-  titleId << std::hex << std::noshowbase << std::setw(8) << std::setfill('0')
-          << kernel_state()->title_id();
-
-  std::stringstream url;
-  url << cvars::api_address << "/title/" << titleId.str()
-      << "/ports";
-
-  curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-
-  res = curl_easy_perform(curl);
-
-  curl_easy_cleanup(curl);
-  int httpCode(0);
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-  curl_global_cleanup();
-
-  if (httpCode == 200) {
-    rapidjson::Document d;
-    d.Parse(out.str());
-
-    if (d.HasMember("connect")) {
-      for (const auto& mapping : d["connect"].GetArray()) {
-        mappedConnectPorts[mapping["port"].GetInt()] =
-            mapping["mappedTo"].GetInt();
-      }
-    }
-
-    if (d.HasMember("bind")) {
-      for (const auto& mapping : d["bind"].GetArray()) {
-        mappedBindPorts[mapping["port"].GetInt()] =
-            mapping["mappedTo"].GetInt();
-      }
-    }
-  }
-#pragma endregion
-}
-
-
 dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> addr_ptr) {
-  if (!upnp_fetched_) {
-    // TODO: this should be done ahead of time, or
-    // asynchronously returning XNET_GET_XNADDR_PENDING
-    FetchUPnP();
-    RegisterPlayer();
-    DownloadPortMappings();
-  }
+  //  TODO: this should be done ahead of time, or
+  //  asynchronously returning XNET_GET_XNADDR_PENDING
 
-  addr_ptr->ina = online_ip_;
-  addr_ptr->inaOnline = online_ip_;
-  addr_ptr->wPortOnline = getPort();
-  memcpy(addr_ptr->abEnet, getMacAddress(), 6);
-  memcpy(addr_ptr->abOnline, getMacAddress(), 6);
+  // Halo 3 calls NetDll_XNetGetTitleXnAddr before NetDll_WSAStartup
+
+  // Wait for NetDll_WSAStartup to setup XLiveAPI?
+  if (!XLiveAPI::is_active()) {
+    XLiveAPI::Init();
+
+    // XELOGE("NetDll_XNetGetTitleXnAddr PENDING XLiveAPI");
+    // return XnAddrStatus::XNET_GET_XNADDR_PENDING;
+  }
 
   auto status = XnAddrStatus::XNET_GET_XNADDR_STATIC |
                 XnAddrStatus::XNET_GET_XNADDR_GATEWAY |
                 XnAddrStatus::XNET_GET_XNADDR_DNS;
 
-  if (online_ip_.s_addr != 0) {
+  if (XLiveAPI::IsOnline()) {
+    addr_ptr->ina = XLiveAPI::OnlineIP().sin_addr;
+    addr_ptr->inaOnline = XLiveAPI::OnlineIP().sin_addr;
+    addr_ptr->wPortOnline = XLiveAPI::GetPlayerPort();
+
     status |= XnAddrStatus::XNET_GET_XNADDR_ONLINE;
   } else {
-    addr_ptr->inaOnline.S_un.S_addr = 0;
+    addr_ptr->inaOnline.s_addr = 0;
+    addr_ptr->wPortOnline = 0;
   }
+  memcpy(addr_ptr->abEnet, XLiveAPI::mac_address, 6);
+  memcpy(addr_ptr->abOnline, XLiveAPI::mac_address,
+         6);  // Why mac address of IP?
 
   // TODO(gibbed): A proper mac address.
   // RakNet's 360 version appears to depend on abEnet to create "random" 64-bit
@@ -928,135 +651,66 @@ dword_result_t NetDll_XNetGetDebugXnAddr_entry(dword_t caller,
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetDebugXnAddr, kNetworking, kStub);
 
-// TODO: Move - Codie
-bool StringToHex(const std::string& inStr, unsigned char* outStr) {
-  size_t len = inStr.length();
-  for (size_t i = 0; i < len; i += 2) {
-    sscanf(inStr.c_str() + i, "%2hhx", outStr);
-    ++outStr;
-  }
-  return true;
-}
-
-// TODO: Move - Codie
-std::map<xe::be<uint32_t>, xe::be<uint64_t>> machineIdCache{};
-std::map<xe::be<uint32_t>, xe::be<uint64_t>> sessionIdCache{};
-std::map<xe::be<uint32_t>, xe::be<uint64_t>> macAddressCache{};
-
-void clearXnaddrCache() { 
-    sessionIdCache.clear();
-    macAddressCache.clear();
-}
-
-// this works dont touch it
-dword_result_t NetDll_XNetXnAddrToMachineId_entry(dword_t caller,
-                                                  pointer_t<XNADDR> addr_ptr,
-                                                  pointer_t<be<uint64_t>> id_ptr) {
+dword_result_t NetDll_XNetXnAddrToMachineId_entry(
+    dword_t caller, pointer_t<XNADDR> addr_ptr,
+    pointer_t<be<uint64_t>> id_ptr) {
   // Tell the caller we're not signed in to live (non-zero ret)
-  //if (addr_ptr->inaOnline.S_un.S_un_b.s_b4 == 170) *id_ptr = 0xFA000000049B679F;
-  //else
+  // if (addr_ptr->inaOnline.S_un.S_un_b.s_b4 == 170) *id_ptr =
+  // 0xFA000000049B679F; else
   //  *id_ptr = 0xFA000000039E7542;
 
-      #pragma region Curl
-  /*
-      TODO:
-          - Refactor the CURL out to a separate class.
-          - Use the overlapped task to do this asyncronously.
-  */
-
-    if (machineIdCache.find(addr_ptr->inaOnline.S_un.S_addr) != machineIdCache.end()) {
-        *id_ptr = machineIdCache[addr_ptr->inaOnline.S_un.S_addr];
-        return 0;
-    }
-
-  Document d;
-  d.SetObject();
-
-  Document::AllocatorType& allocator = d.GetAllocator();
-
-  size_t sz = allocator.Size();
-
-  char ipString[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &addr_ptr->inaOnline, ipString, INET_ADDRSTRLEN);
-
-  d.AddMember("hostAddress", std::string(ipString), allocator);
-
-  rapidjson::StringBuffer strbuf;
-  PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
-  d.Accept(writer);
-
-  CURL* curl;
-  CURLcode res;
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if (curl == NULL) {
-    return 128;
+  // Check if we have already cached the conversion to reduce API calls.
+  if (XLiveAPI::machineIdCache.find(addr_ptr->inaOnline.s_addr) !=
+      XLiveAPI::machineIdCache.end()) {
+    *id_ptr = XLiveAPI::machineIdCache[addr_ptr->inaOnline.s_addr];
+    //*id_ptr = htonl(addr_ptr->inaOnline.s_addr);
+    return X_ERROR_SUCCESS;
   }
 
-  std::stringstream out;
+  XLiveAPI::Player session = XLiveAPI::FindPlayers();
 
-  struct curl_slist* headers = NULL;
-  headers = curl_slist_append(headers, "Content-Type: application/json");
-  headers = curl_slist_append(headers, "Accept: application/json");
-  headers = curl_slist_append(headers, "charset: utf-8");
+  *id_ptr = session.sessionId;
 
-  std::stringstream url;
-  url << cvars::api_address << "/players/find";
+  // Cache the conversion.
+  XLiveAPI::machineIdCache.emplace(addr_ptr->inaOnline.s_addr,
+                                   session.sessionId);
 
-  curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-  curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
-  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
-
-  res = curl_easy_perform(curl);
-
-  curl_easy_cleanup(curl);
-  int httpCode(0);
-  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-  curl_global_cleanup();
-
-  if (httpCode == 201) {
-    rapidjson::Document d;
-    d.Parse(out.str());
-
-    unsigned char machineId[8];
-
-    StringToHex(d["machineId"].GetString(), machineId);
-
-    *id_ptr = SessionIdtoUint64(machineId);
-    machineIdCache.emplace(addr_ptr->inaOnline.S_un.S_addr, SessionIdtoUint64(machineId));
-  }
-#pragma endregion
-
-  //*id_ptr = htonl(addr_ptr->inaOnline.S_un.S_addr);
-  return 0;
+  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToMachineId, kNetworking, kStub);
 
-dword_result_t NetDll_XNetConnect_entry(dword_t caller, dword_t) {
-  //XELOGI("XNetConnect({:08X}:{})", addr->ina.S_un.S_addr, addr->wPortOnline);
+dword_result_t NetDll_XNetUnregisterInAddr_entry(dword_t caller, dword_t addr) {
+  XELOGI("NetDll_XNetUnregisterInAddr({:08X})", cvars::log_mask_ips ? 0 : addr);
+
   return 0;
 }
-DECLARE_XAM_EXPORT1(NetDll_XNetConnect, kNetworking, kImplemented);
+DECLARE_XAM_EXPORT1(NetDll_XNetUnregisterInAddr, kNetworking, kStub);
 
-dword_result_t NetDll_XNetGetConnectStatus_entry(dword_t caller,
-                                                 dword_t addr) {
-  XELOGI("XNetGetConnectStatus({:08X})", addr);
-  return 2;
+// https://github.com/pnill/cartographer/blob/28aa77ba9a1062aec4638b34a01c1a4e77e25e04/xlive/xlivedefs.h#L218
+dword_result_t NetDll_XNetConnect_entry(dword_t caller, dword_t addr) {
+  // XELOGI("XNetConnect({:08X}:{})", addr->ina.s_addr, addr->wPortOnline);
+  XELOGI("XNetConnect({:08X})", cvars::log_mask_ips ? 0 : addr);
+
+  return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(NetDll_XNetGetConnectStatus, kNetworking, kImplemented);
+DECLARE_XAM_EXPORT1(NetDll_XNetConnect, kNetworking, kStub);
+
+// https://github.com/pnill/cartographer/blob/28aa77ba9a1062aec4638b34a01c1a4e77e25e04/xlive/xlivedefs.h#L219
+dword_result_t NetDll_XNetGetConnectStatus_entry(dword_t caller, dword_t addr) {
+  XELOGI("XNetGetConnectStatus({:08X})", cvars::log_mask_ips ? 0 : addr);
+
+  return STATUS_CONNECTED;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetGetConnectStatus, kNetworking, kStub);
 
 dword_result_t NetDll_XNetServerToInAddr_entry(dword_t caller, dword_t addr,
                                                dword_t serviceId,
                                                pointer_t<in_addr> pina) {
-  XELOGI("XNetServerToInAddr({:08X} {:08X})", addr, (uint32_t)pina.guest_address());
+  XELOGI("XNetServerToInAddr({:08X} {:08X})", addr,
+         (uint32_t)pina.guest_address());
   pina->S_un.S_addr = htonl(addr);
-  return 0;
+
+  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetServerToInAddr, kNetworking, kImplemented);
 
@@ -1071,128 +725,58 @@ DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToString, kNetworking, kStub);
 // subsequent socket calls (like a handle to a XNet address)
 dword_result_t NetDll_XNetXnAddrToInAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> xn_addr,
-                                               lpvoid_t xid,
+                                               pointer_t<XLiveAPI::XNKID> xid,
                                                pointer_t<in_addr> in_addr) {
-  if (xn_addr->inaOnline.s_addr != 0) {
+  if (XLiveAPI::IsOnline()) {
     in_addr->s_addr = xn_addr->inaOnline.s_addr;
 
-    return 0;
+    return X_ERROR_SUCCESS;
   }
 
   return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToInAddr, kNetworking, kSketchy);
 
-//static const unsigned char codieSession[] = {0xC0, 0xDE, 0xC0, 0xDE,
-//                                           0xC0, 0xDE, 0xC0, 0xDE};
-// Does the reverse of the above.
-// FIXME: Arguments may not be correct.
 dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
                                                pointer_t<XNADDR> xn_addr,
-                                               dword_t xid_ptr) {
-  xn_addr->ina.S_un.S_addr = ntohl(in_addr);
-
-  //xn_addr->ina.S_un.S_un_b.s_b1 = 0;
-
-
-  xn_addr->inaOnline.S_un.S_addr = ntohl(in_addr);
-  xn_addr->wPortOnline = 36020;
-
-  if (macAddressCache.find(xn_addr->inaOnline.S_un.S_addr) == macAddressCache.end()) {
-#pragma region Curl
-    /*
-        TODO:
-            - Refactor the CURL out to a separate class.
-            - Use the overlapped task to do this asyncronously.
-    */
-
-    Document d;
-    d.SetObject();
-
-    Document::AllocatorType& allocator = d.GetAllocator();
-
-    size_t sz = allocator.Size();
-
-    char ipString[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &xn_addr->inaOnline, ipString, INET_ADDRSTRLEN);
-
-    d.AddMember("hostAddress", std::string(ipString), allocator);
-
-    rapidjson::StringBuffer strbuf;
-    PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
-    d.Accept(writer);
-
-    CURL* curl;
-    CURLcode res;
-
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl = curl_easy_init();
-    if (curl == NULL) {
-      return 128;
-    }
-
-    std::stringstream out;
-
-    struct curl_slist* headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: application/json");
-    headers = curl_slist_append(headers, "charset: utf-8");
-
-    std::stringstream url;
-    url << cvars::api_address << "/players/find";
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
-
-    res = curl_easy_perform(curl);
-
-    curl_easy_cleanup(curl);
-    int httpCode(0);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-    curl_global_cleanup();
-
-    if (httpCode == 201) {
-      rapidjson::Document d;
-      d.Parse(out.str());
-
-      unsigned char macAddress[6];
-      unsigned char sessionId[8];
-
-      StringToHex(d["sessionId"].GetString(), sessionId);
-      StringToHex(d["macAddress"].GetString(), macAddress);
-
-      sessionIdCache.emplace(xn_addr->inaOnline.S_un.S_addr, SessionIdtoUint64(sessionId));
-      macAddressCache.emplace(xn_addr->inaOnline.S_un.S_addr, MacAddresstoUint64(macAddress));
-    }
-#pragma endregion
+                                               pointer_t<XLiveAPI::XNKID> xid_ptr) {
+  if (xn_addr == nullptr) {
+    return X_STATUS_SUCCESS;
   }
 
-  Uint64toMacAddress(macAddressCache[xn_addr->inaOnline.S_un.S_addr], xn_addr->abEnet);
-  Uint64toMacAddress(macAddressCache[xn_addr->inaOnline.S_un.S_addr], xn_addr->abOnline);
+  xn_addr->inaOnline.s_addr = ntohl(in_addr);
+  xn_addr->ina.s_addr = ntohl(in_addr);
+  xn_addr->wPortOnline = XLiveAPI::GetPlayerPort();
 
-  if (xid_ptr != 0) {
-    auto sessionIdPtr = kernel_memory()->TranslateVirtual<unsigned char*>(xid_ptr);
-    auto sessionId = sessionIdCache[xn_addr->inaOnline.S_un.S_addr];
+  // Find cached online IP?
+  if (XLiveAPI::macAddressCache.find(xn_addr->inaOnline.s_addr) ==
+      XLiveAPI::macAddressCache.end()) {
+    XLiveAPI::Player session = XLiveAPI::FindPlayers();
 
-    std::stringstream sessionIdStr;
-    sessionIdStr << std::hex << std::noshowbase << std::setw(16)
-                 << std::setfill('0') << sessionId;
+    XLiveAPI::sessionIdCache.emplace(xn_addr->inaOnline.s_addr,
+                                     session.sessionId);
 
-
-    Uint64toSessionId(sessionId, sessionIdPtr);
-
-
-    // old
-    //memcpy(kernel_memory()->TranslateVirtual<unsigned char*>(xid_ptr), mySessionId, 8);
+    XLiveAPI::macAddressCache.emplace(xn_addr->inaOnline.s_addr,
+                                      session.macAddress);
   }
-  return 0;
 
+  XLiveAPI::Uint64toMacAddress(
+      XLiveAPI::macAddressCache[xn_addr->inaOnline.s_addr], xn_addr->abEnet);
+
+  XLiveAPI::Uint64toMacAddress(
+      XLiveAPI::macAddressCache[xn_addr->inaOnline.s_addr], xn_addr->abOnline);
+
+  if (xid_ptr == nullptr) {
+    return X_STATUS_SUCCESS;
+  }
+
+  auto sessionId_ptr =
+      kernel_memory()->TranslateVirtual<unsigned char*>(xid_ptr);
+
+  XLiveAPI::Uint64toSessionId(
+      XLiveAPI::sessionIdCache[xn_addr->inaOnline.s_addr], sessionId_ptr);
+
+  return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToXnAddr, kNetworking, kImplemented);
 
@@ -1200,21 +784,34 @@ DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToXnAddr, kNetworking, kImplemented);
 // Reserves a port for use by system link
 dword_result_t NetDll_XNetSetSystemLinkPort_entry(dword_t caller,
                                                   dword_t port) {
-  return 0;
+  XELOGI("XNetSetSystemLinkPort: {}", port);
+
+  return X_STATUS_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetSetSystemLinkPort, kNetworking, kStub);
 
-// https://github.com/ILOVEPIE/Cxbx-Reloaded/blob/master/src/CxbxKrnl/EmuXOnline.h#L39
-struct XEthernetStatus {
-  static const uint32_t XNET_ETHERNET_LINK_ACTIVE = 0x01;
-  static const uint32_t XNET_ETHERNET_LINK_100MBPS = 0x02;
-  static const uint32_t XNET_ETHERNET_LINK_10MBPS = 0x04;
-  static const uint32_t XNET_ETHERNET_LINK_FULL_DUPLEX = 0x08;
-  static const uint32_t XNET_ETHERNET_LINK_HALF_DUPLEX = 0x10;
-};
+dword_result_t NetDll_XNetGetSystemLinkPort_entry(dword_t caller,
+                                                  dword_t port) {
+  XELOGI("XNetGetSystemLinkPort: {}", port);
+
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetGetSystemLinkPort, kNetworking, kStub);
+
+dword_result_t NetDll_XNetGetBroadcastVersionStatus_entry(dword_t caller,
+                                                          dword_t reset) {
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetGetBroadcastVersionStatus, kNetworking, kStub);
 
 dword_result_t NetDll_XNetGetEthernetLinkStatus_entry(dword_t caller) {
-  return 1 | 2 | 8;
+  if (cvars::offline_mode) {
+    return 0;
+  } else {
+    return XEthernetStatus::XNET_ETHERNET_LINK_ACTIVE |
+           XEthernetStatus::XNET_ETHERNET_LINK_100MBPS |
+           XEthernetStatus::XNET_ETHERNET_LINK_FULL_DUPLEX;
+  }
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetEthernetLinkStatus, kNetworking, kStub);
 
@@ -1270,9 +867,8 @@ DECLARE_XAM_EXPORT1(NetDll_XNetDnsRelease, kNetworking, kStub);
 dword_result_t NetDll_XNetQosServiceLookup_entry(dword_t caller, dword_t flags,
                                                  dword_t event_handle,
                                                  lpdword_t pqos) {
-  XELOGI(
-      "XNetQosServiceLookup({:08X}, {:08X}, {:08X}, {:08X})",
-      caller, flags, event_handle, pqos.guest_address());
+  XELOGI("XNetQosServiceLookup({:08X}, {:08X}, {:08X}, {:08X})", caller, flags,
+         event_handle, pqos.guest_address());
 
   if (pqos) {
     auto qos_guest = kernel_memory()->SystemHeapAlloc(sizeof(XNQOS));
@@ -1287,7 +883,8 @@ dword_result_t NetDll_XNetQosServiceLookup_entry(dword_t caller, dword_t flags,
     qos->info[0].rtt_med_in_msecs = 10;
     qos->info[0].up_bits_per_sec = 13125;
     qos->info[0].down_bits_per_sec = 21058;
-    qos->info[0].flags = 1 | 2 | 3;
+    qos->info[0].flags =
+        XNET_XNQOSINFO::COMPLETE | XNET_XNQOSINFO::TARGET_CONTACTED | 3;
     qos->count_pending = 0;
 
     *pqos = qos_guest;
@@ -1308,152 +905,100 @@ dword_result_t NetDll_XNetQosRelease_entry(dword_t caller,
   if (!qos) {
     return X_STATUS_INVALID_PARAMETER;
   }
+
   kernel_memory()->SystemHeapFree(qos.guest_address());
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetQosRelease, kNetworking, kStub);
 
-dword_result_t NetDll_XNetQosListen_entry(dword_t caller, lpvoid_t sessionId,
-                                          lpvoid_t data, dword_t data_size,
-                                          dword_t r7, dword_t flags) {
+void SendQoSWrapper(uint64_t sessionId, char* qos_payload, size_t qosLength) {
+  XLiveAPI::QoSPost(sessionId, qos_payload, qosLength);
+}
 
-  XELOGI(
-  "XNetQosListen({:08X}, {:016X}, {:016X}, {}, {:08X}, {:08X})", caller,
-         sessionId.host_address(), data.host_address(), data_size, r7,
-         flags);
+dword_result_t NetDll_XNetQosListen_entry(
+    dword_t caller, pointer_t<uint64_t> sessionId, pointer_t<uint32_t> data,
+    dword_t data_size, dword_t bits_per_second, dword_t flags) {
+  XELOGI("XNetQosListen({:08X}, {:016X}, {:016X}, {}, {:08X}, {:08X})", caller,
+         sessionId.host_address(), data.host_address(), data_size,
+         bits_per_second, flags);
 
-    if (data_size <= 0) return 0;
-
-  const void* data_ptr = (void*)data.host_address();
-    const xe::be<uint64_t>* sessionId_ptr =
-        (xe::be<uint64_t>*)sessionId.host_address();
-
-
-  
-                  #pragma region Curl
-  /*
-      TODO:
-          - Refactor the CURL out to a separate class.
-          - Use the overlapped task to do this asyncronously.
-  */
-
-  std::stringstream sessionIdStr;
-  sessionIdStr << std::hex << std::noshowbase << std::setw(16)
-               << std::setfill('0') << *sessionId_ptr;
-
-  CURL* curl;
-  CURLcode res;
-
-  curl_global_init(CURL_GLOBAL_ALL);
-  curl = curl_easy_init();
-  if (curl == NULL) {
-    return 128;
+  switch (flags) {
+    case LISTEN_ENABLE: {
+      XELOGI("XNetQosListen LISTEN_ENABLE");
+    } break;
+    case LISTEN_DISABLE: {
+      XELOGI("XNetQosListen LISTEN_DISABLE");
+    } break;
+    case LISTEN_SET_BITSPERSEC: {
+      XELOGI("XNetQosListen LISTEN_SET_BITSPERSEC");
+    } break;
+    case XLISTEN_RELEASE: {
+      XELOGI("XNetQosListen LISTEN_RELEASE");
+    }
   }
 
-  std::stringstream out;
+  if (data_size <= 0) {
+    return X_ERROR_SUCCESS;
+  }
 
-  struct curl_slist* headers = NULL;
+  if (data == nullptr) {
+    return X_ERROR_SUCCESS;
+  }
 
-  std::stringstream titleId;
-  titleId << std::hex << std::noshowbase << std::setw(8) << std::setfill('0')
-          << kernel_state()->title_id();
+  const xe::be<uint64_t> session_id =
+      *kernel_memory()->TranslateVirtual<xe::be<uint64_t>*>(sessionId);
 
-  std::stringstream url;
-  url << cvars::api_address << "/title/" << titleId.str() << "/sessions/" << sessionIdStr.str() << "/qos";
-  
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)data_size);
-  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data_ptr);
-  curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+  if (flags & LISTEN_SET_DATA) {
+    std::vector<char> qos_buffer(data_size);
+    memcpy(qos_buffer.data(), data, data_size);
 
-  /* enable verbose for easier tracing */
-  curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-  //curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+    if (XLiveAPI::UpdateQoSCache(session_id, qos_buffer, data_size)) {
+      XELOGI("XNetQosListen LISTEN_SET_DATA"); 
 
-  res = curl_easy_perform(curl);
-
-  curl_easy_cleanup(curl);
-  curl_global_cleanup();
-#pragma endregion
-
+      std::thread t1(SendQoSWrapper, session_id, qos_buffer.data(), data_size);
+      t1.detach();
+    }
+  }
 
   return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(NetDll_XNetQosListen, kNetworking, kStub);
+DECLARE_XAM_EXPORT1(NetDll_XNetQosListen, kNetworking, kSketchy);
 
-dword_result_t NetDll_XNetQosLookup_entry(dword_t caller, dword_t sessionsCount, dword_t unk2, lpvoid_t sessionIdPtrsPtr,
-    dword_t unk4,
-                                          dword_t unk5, dword_t unk6,
-                                          dword_t service_id, dword_t probes_count,
-                                          dword_t bits_per_second, dword_t flags,
-                                          dword_t event_handle, lpdword_t qos_ptr) {
-  if (qos_ptr) {
-    auto qos_guest = kernel_memory()->SystemHeapAlloc(sizeof(XNQOS));
-    auto qos = kernel_memory()->TranslateVirtual<XNQOS*>(qos_guest);
-    qos->count = 1;
+dword_result_t NetDll_XNetQosLookup_entry(
+    dword_t caller, dword_t sessionsCount,
+    pointer_t<uint32_t> remote_addressesPtrsPtr,
+    pointer_t<uint32_t> sessionIdPtrsPtr,
+    pointer_t<uint32_t> remote_keysPtrsPtr, dword_t num_gateways,
+    pointer_t<uint32_t> gateways_ips_ptr, pointer_t<uint32_t> service_id_ptr,
+    dword_t probes_count, dword_t bits_per_second, dword_t flags,
+    dword_t event_handle, lpdword_t qos_ptr) {
+  if (qos_ptr == nullptr) {
+    return (uint32_t)X_WSAError::X_WSAEACCES;
+  }
 
-    const xe::be<uint32_t> sessionId_ptrs_ptr = *(xe::be<uint32_t>*)sessionIdPtrsPtr.host_address();
+  if (sessionIdPtrsPtr == nullptr) {
+    return X_ERROR_SUCCESS;
+  }
 
-    const xe::be<uint64_t>* sessionId_ptr =
-        kernel_memory()->TranslateVirtual<xe::be<uint64_t>*>(sessionId_ptrs_ptr);
+  const auto qos_guest = kernel_memory()->SystemHeapAlloc(sizeof(XNQOS));
+  const auto qos = kernel_memory()->TranslateVirtual<XNQOS*>(qos_guest);
+  qos->count = 1;
 
+  const xe::be<uint32_t> sessionId_ptrs_ptr =
+      *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(sessionIdPtrsPtr);
 
-        #pragma region Curl
-    /*
-        TODO:
-            - Refactor the CURL out to a separate class.
-            - Use the overlapped task to do this asyncronously.
-    */
+  const xe::be<uint64_t> session_Id =
+      *kernel_memory()->TranslateVirtual<xe::be<uint64_t>*>(sessionId_ptrs_ptr);
 
-    std::stringstream sessionIdStr;
-    sessionIdStr << std::hex << std::noshowbase << std::setw(16)
-                 << std::setfill('0') << *sessionId_ptr;
+  XLiveAPI::memory chunk = XLiveAPI::QoSGet(session_Id);
 
-    CURL* curl;
-    CURLcode res;
+  if (chunk.http_code == 200) {
+    auto data_ptr = kernel_memory()->SystemHeapAlloc((uint32_t)chunk.size);
+    auto data = kernel_memory()->TranslateVirtual<int32_t*>(data_ptr);
 
-    curl_global_init(CURL_GLOBAL_ALL);
-    curl = curl_easy_init();
-    if (curl == NULL) {
-      return 128;
-    }
-
-    std::stringstream out;
-
-    struct curl_slist* headers = NULL;
-
-    std::stringstream titleId;
-    titleId << std::hex << std::noshowbase << std::setw(8) << std::setfill('0')
-            << kernel_state()->title_id();
-
-    std::stringstream url;
-    url << cvars::api_address << "/title/" << titleId.str() << "/sessions/" << sessionIdStr.str() << "/qos";
-
-    curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
-
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, callback);
-
-    res = curl_easy_perform(curl);
-
-    curl_easy_cleanup(curl);
-    int httpCode(0);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-    curl_global_cleanup();
-
-    if (httpCode == 200) {
-      auto data_ptr = kernel_memory()->SystemHeapAlloc((uint32_t)out.str().length());
-      auto data = kernel_memory()->TranslateVirtual<int32_t*>(data_ptr);
-
-      qos->info[0].data_ptr = data_ptr;
-      memcpy(data, out.str().c_str(), out.str().length());
-      qos->info[0].data_len = (uint16_t)out.str().length();
-    }
-
-#pragma endregion
-
-
-
+    qos->info[0].data_ptr = data_ptr;
+    memcpy(data, chunk.response, chunk.size);
+    qos->info[0].data_len = (uint16_t)chunk.size;
 
     qos->info[0].probes_xmit = 4;
     qos->info[0].probes_recv = 4;
@@ -1461,11 +1006,14 @@ dword_result_t NetDll_XNetQosLookup_entry(dword_t caller, dword_t sessionsCount,
     qos->info[0].rtt_med_in_msecs = 10;
     qos->info[0].up_bits_per_sec = 13125;
     qos->info[0].down_bits_per_sec = 21058;
-    qos->info[0].flags = 1 | 2 | 0x8;
+    qos->info[0].flags = XNET_XNQOSINFO::COMPLETE |
+                         XNET_XNQOSINFO::TARGET_CONTACTED |
+                         XNET_XNQOSINFO::DATA_RECEIVED;
     qos->count_pending = 0;
 
     *qos_ptr = qos_guest;
   }
+
   if (event_handle) {
     auto ev =
         kernel_state()->object_table()->LookupObject<XEvent>(event_handle);
@@ -1473,40 +1021,29 @@ dword_result_t NetDll_XNetQosLookup_entry(dword_t caller, dword_t sessionsCount,
     ev->Set(0, false);
   }
 
-  return ERROR_SUCCESS;
+  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetQosLookup, kNetworking, kImplemented);
 
-typedef struct {
-  DWORD size_of_struct;
-  DWORD requests_received_count;
-  DWORD probes_received_count;
-  DWORD unk;
-  DWORD data_replies_sent_count;
-  DWORD data_reply_bytes_sent;
-  DWORD probe_replies_sent_count;
-} XNQOSLISTENSTATS;
-
-
-dword_result_t NetDll_XNetQosGetListenStats_entry(
-    dword_t caller, dword_t unk, dword_t pxnkid, lpdword_t pQosListenStats) {
-  XELOGI(
-      "XNetQosGetListenStats({:08X}, {:08X}, {:08X}, {:08X})", caller, unk,
+dword_result_t NetDll_XNetQosGetListenStats_entry(dword_t caller, dword_t unk,
+                                                  dword_t pxnkid,
+                                                  lpdword_t pQosListenStats) {
+  XELOGI("XNetQosGetListenStats({:08X}, {:08X}, {:08X}, {:08X})", caller, unk,
          caller, unk, pxnkid, pQosListenStats.guest_address());
 
   if (pQosListenStats) {
-    auto qos =
-        kernel_memory()->TranslateVirtual<XNQOSLISTENSTATS*>(pQosListenStats.guest_address());
-    
+    auto qos = kernel_memory()->TranslateVirtual<XNQOSLISTENSTATS*>(
+        pQosListenStats.guest_address());
+
     qos->requests_received_count = 1;
     qos->probes_received_count = 1;
-    qos->unk = 1;
+    qos->slots_full_discards_count = 1;
     qos->data_replies_sent_count = 1;
     qos->data_reply_bytes_sent = 1;
     qos->probe_replies_sent_count = 1;
   }
 
-  return ERROR_SUCCESS;
+  return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetQosGetListenStats, kNetworking, kImplemented);
 
@@ -1534,7 +1071,6 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
   X_STATUS result = socket->Initialize(XSocket::AddressFamily((uint32_t)af),
                                        XSocket::Type((uint32_t)type),
                                        XSocket::Protocol((uint32_t)protocol));
-
   if (XFAILED(result)) {
     socket->Release();
 
@@ -1542,9 +1078,9 @@ dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
     return -1;
   }
 
-  //socket->SetOption(SOL_SOCKET, 0x5801, &optEnable, sizeof(BOOL));
-  //if (type == SOCK_STREAM)
-  //  socket->SetOption(SOL_SOCKET, 0x5802, &optEnable, sizeof(BOOL));
+  // socket->SetOption(SOL_SOCKET, 0x5801, &optEnable, sizeof(BOOL));
+  // if (type == SOCK_STREAM)
+  //   socket->SetOption(SOL_SOCKET, 0x5802, &optEnable, sizeof(BOOL));
 
   return socket->handle();
 }
@@ -1557,6 +1093,9 @@ dword_result_t NetDll_closesocket_entry(dword_t caller, dword_t socket_handle) {
     XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
     return -1;
   }
+
+  // Remove port if socket closes
+  // XLiveAPI::upnp_handler.remove_port(socket.get()->bound_port(), "UDP");
 
   // TODO: Absolutely delete this object. It is no longer valid after calling
   // closesocket.
@@ -1658,6 +1197,10 @@ dword_result_t NetDll_bind_entry(dword_t caller, dword_t socket_handle,
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
+
+  // Can be called multiple times.
+  XLiveAPI::upnp_handler.add_port(XLiveAPI::LocalIP_str(),
+                                  ntohs(socket->bound_port()), "UDP");
 
   return 0;
 }
@@ -1931,7 +1474,6 @@ dword_result_t NetDll___WSAFDIsSet_entry(dword_t socket_handle,
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll___WSAFDIsSet, kNetworking, kImplemented);
-
 
 void NetDll_WSASetLastError_entry(dword_t error_code) {
   XThread::SetLastError(error_code);

@@ -2,66 +2,222 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2024 Xenia Emulator. All rights reserved.                        *
+ * Copyright 2023 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
-#ifndef XENIA_KERNEL_XLIVEAPI_H_
-#define XENIA_KERNEL_XLIVEAPI_H_
+#include "xenia/kernel/upnp.h"
 
-#include <unordered_set>
+#define RAPIDJSON_HAS_STDSTRING 1
 
 #include <third_party/libcurl/include/curl/curl.h>
-
-#include "xenia/base/byte_order.h"
-#include "xenia/kernel/upnp.h"
-#include "xenia/kernel/util/net_utils.h"
-#include "xenia/kernel/xnet.h"
-
-#include "xenia/kernel/json/arbitration_object_json.h"
-#include "xenia/kernel/json/friend_presence_object_json.h"
-#include "xenia/kernel/json/http_response_object_json.h"
-#include "xenia/kernel/json/leaderboard_object_json.h"
-#include "xenia/kernel/json/player_object_json.h"
-#include "xenia/kernel/json/session_object_json.h"
-#include "xenia/kernel/xsession.h"
-
-#ifdef XE_PLATFORM_WIN32
-#include <iphlpapi.h>
-#endif  // XE_PLATFORM_WIN32
+#include <third_party/rapidjson/include/rapidjson/document.h>
+#include <third_party/rapidjson/include/rapidjson/prettywriter.h>
+#include <third_party/rapidjson/include/rapidjson/stringbuffer.h>
 
 namespace xe {
 namespace kernel {
-
 class XLiveAPI {
  public:
-  enum class InitState { Success, Failed, Pending };
+  struct memory {
+    char* response{};
+    size_t size = 0;
+    uint64_t http_code;
+  };
 
-  static void IpGetConsoleXnAddr(XNADDR* XnAddr_ptr);
+  struct Player {
+    std::string xuid;
+    // xe::be<uint64_t> xuid;
+    std::string hostAddress;
+    xe::be<uint64_t> machineId;
+    uint16_t port;
+    xe::be<uint64_t> macAddress;  // 6 Bytes
+    xe::be<uint64_t> sessionId;
+  };
 
-  static InitState GetInitState();
+  struct SessionJSON {
+    std::string sessionid;
+    xe::be<uint16_t> port;
+    xe::be<uint32_t> flags;
+    std::string hostAddress;
+    std::string macAddress;
+    xe::be<uint32_t> publicSlotsCount;
+    xe::be<uint32_t> privateSlotsCount;
+    xe::be<uint32_t> openPublicSlotsCount;
+    xe::be<uint32_t> openPrivateSlotsCount;
+    xe::be<uint32_t> filledPublicSlotsCount;
+    xe::be<uint32_t> filledPrivateSlotsCount;
+    std::vector<Player> players;
+  };
 
-  static std::vector<std::string> ParseDelimitedList(std::string_view csv,
-                                                     uint32_t count);
+  struct XSessionArbitrationJSON {
+    xe::be<uint32_t> totalPlayers;
+    std::vector<std::vector<Player>> machines;
+  };
 
-  static std::vector<std::string> ParseAPIList();
+#pragma region XSession Structs
+  struct XNKID {
+    uint8_t ab[8];
+  };
 
-  static std::vector<std::uint64_t> XLiveAPI::ParseFriendsXUIDs();
+  struct XNKEY {
+    uint8_t ab[16];
+  };
 
-  static void SetAPIAddress(std::string address);
+  struct XNADDR {
+    in_addr ina;
+    in_addr inaOnline;
+    xe::be<uint16_t> wPortOnline;
+    uint8_t abEnet[6];
+    uint8_t abOnline[20];
+  };
 
-  static void SetNetworkInterfaceByGUID(std::string guid);
+  struct XSESSION_INFO {
+    XNKID sessionID;
+    XNADDR hostAddress;
+    XNKEY keyExchangeKey;
+  };
 
-  static void SetNetworkMode(int32_t mode);
+  struct XSessionModify {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> flags;
+    xe::be<uint32_t> maxPublicSlots;
+    xe::be<uint32_t> maxPrivateSlots;
+    xe::be<uint32_t> xoverlapped;
+  };
+
+  struct XSessionSearchEx {
+    xe::be<uint32_t> proc_index;
+    xe::be<uint32_t> user_index;
+    xe::be<uint32_t> num_results;
+    // xe::be<uint32_t> num_users; will break struct
+    xe::be<uint16_t> num_props;
+    xe::be<uint16_t> num_ctx;
+    xe::be<uint32_t> props_ptr;
+    xe::be<uint32_t> ctx_ptr;
+    xe::be<uint32_t> results_buffer;
+    xe::be<uint32_t> search_results;
+    xe::be<uint32_t> xoverlapped;
+  };
+
+  struct XSessionSearch {
+    xe::be<uint32_t> proc_index;
+    xe::be<uint32_t> user_index;
+    xe::be<uint32_t> num_results;
+    xe::be<uint16_t> num_props;
+    xe::be<uint16_t> num_ctx;
+    xe::be<uint32_t> props_ptr;
+    xe::be<uint32_t> ctx_ptr;
+    xe::be<uint32_t> results_buffer;
+    xe::be<uint32_t> search_results;
+    xe::be<uint32_t> xoverlapped;
+  };
+
+  struct XSessionDetails {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> details_buffer_size;
+    xe::be<uint32_t> details_buffer;
+    xe::be<uint32_t> pXOverlapped;
+  };
+
+  struct XSessionMigate {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> user_index;
+    xe::be<uint32_t> session_info_ptr;
+    xe::be<uint32_t> pXOverlapped;
+  };
+
+  struct XSessionArbitrationData {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> flags;
+    xe::be<uint32_t> unk1;
+    xe::be<uint32_t> unk2;
+    xe::be<uint32_t> session_nonce;
+    xe::be<uint32_t> results_buffer_size;
+    xe::be<uint32_t> results;
+    xe::be<uint32_t> pXOverlapped;
+  };
+
+  struct XSesion {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> flags;
+    xe::be<uint32_t> num_slots_public;
+    xe::be<uint32_t> num_slots_private;
+    xe::be<uint32_t> user_index;
+    xe::be<uint32_t> session_info_ptr;
+    xe::be<uint32_t> nonce_ptr;
+  };
+
+  struct XSessionWriteStats {
+    xe::be<uint32_t> session_handle;
+    xe::be<uint32_t> unk1;
+    xe::be<uint64_t> xuid;
+    xe::be<uint32_t> number_of_leaderboards;
+    xe::be<uint32_t> leaderboards_guest_address;
+    xe::be<uint32_t> xoverlapped;
+  };
+
+  struct XSessionViewProperties {
+    xe::be<uint32_t> leaderboard_id;
+    xe::be<uint32_t> properties_count;
+    xe::be<uint32_t> properties_guest_address;
+  };
+
+  struct XONLINE_SERVICE_INFO {
+    xe::be<uint32_t> id;
+    in_addr ip;
+    xe::be<uint16_t> port;
+    xe::be<uint16_t> reserved;
+  };
+  static_assert_size(XONLINE_SERVICE_INFO, 12);
+
+  struct XUSER_DATA {
+    uint8_t type;
+
+    union {
+      xe::be<uint32_t> dword_data;  // XUSER_DATA_TYPE_INT32
+      xe::be<uint64_t> qword_data;  // XUSER_DATA_TYPE_INT64
+      xe::be<double> double_data;   // XUSER_DATA_TYPE_DOUBLE
+      struct                        // XUSER_DATA_TYPE_UNICODE
+      {
+        xe::be<uint32_t> string_length;
+        xe::be<uint32_t> string_ptr;
+      } string;
+      xe::be<float> float_data;
+      struct {
+        xe::be<uint32_t> data_length;
+        xe::be<uint32_t> data_ptr;
+      } binary;
+      FILETIME filetime_data;
+    };
+  };
+
+  struct XUSER_PROPERTY {
+    xe::be<uint32_t> property_id;
+    XUSER_DATA value;
+  };
+
+  struct XTitleServer {
+    in_addr server_address;
+    uint32_t flags;
+    char server_description[200];
+  };
+  static_assert_size(XTitleServer, 208);
+
+#pragma endregion
+
+  //~XLiveAPI() {
+  //  // upnp_handler.~upnp();
+  //}
+
+  static bool is_active();
 
   static std::string GetApiAddress();
 
   static uint32_t GetNatType();
 
-  static bool IsConnectedToServer();
-
-  static bool IsConnectedToLAN();
+  static bool IsOnline();
 
   static uint16_t GetPlayerPort();
 
@@ -69,92 +225,83 @@ class XLiveAPI {
 
   static void Init();
 
+  static void RandomBytes(unsigned char* buffer_ptr, uint32_t length);
+
   static void clearXnaddrCache();
 
   static sockaddr_in Getwhoami();
 
+  static sockaddr_in GetLocalIP();
+
+  static const std::string ip_to_string(sockaddr_in sockaddr);
+
   static void DownloadPortMappings();
 
-  static const uint64_t GetMachineId(const uint64_t macAddress);
+  static xe::be<uint64_t> MacAddresstoUint64(const unsigned char* macAddress);
 
-  static const uint64_t GetLocalMachineId();
+  static void Uint64toSessionId(xe::be<uint64_t> sessionID,
+                                unsigned char* sessionIdOut);
 
-  static std::unique_ptr<HTTPResponseObjectJSON> RegisterPlayer();
+  static void Uint64toMacAddress(xe::be<uint64_t> macAddress,
+                                 unsigned char* macAddressOut);
 
-  static std::unique_ptr<PlayerObjectJSON> FindPlayer(std::string ip);
+  static uint64_t GetMachineId();
 
-  static bool UpdateQoSCache(const uint64_t sessionId,
-                             const std::vector<uint8_t> qos_payloade);
+  static void RegisterPlayer();
 
-  static void QoSPost(uint64_t sessionId, uint8_t* qosData, size_t qosLength);
+  static uint64_t hex_to_uint64(const char* hex);
 
-  static response_data QoSGet(uint64_t sessionId);
+  static XLiveAPI::Player FindPlayers();
 
-  static void SessionModify(uint64_t sessionId, XSessionModify* data);
+  static void QoSPost(xe::be<uint64_t> sessionId, char* qosData,
+                      size_t qosLength);
 
-  static const std::vector<std::unique_ptr<SessionObjectJSON>> SessionSearch(
-      XSessionSearch* data, uint32_t num_users);
+  static XLiveAPI::memory QoSGet(xe::be<uint64_t> sessionId);
 
-  static void SessionContextSet(uint64_t session_id,
-                                std::map<uint32_t, uint32_t> contexts);
+  static void SessionModify(xe::be<uint64_t> sessionId, XSessionModify* data);
 
-  static const std::map<uint32_t, uint32_t> SessionContextGet(
-      uint64_t session_id);
+  static const std::vector<XLiveAPI::SessionJSON> SessionSearchEx(
+      XSessionSearchEx* data);
 
-  static const std::unique_ptr<SessionObjectJSON> SessionDetails(
-      uint64_t sessionId);
+  static const std::vector<XLiveAPI::SessionJSON> SessionSearch(
+      XSessionSearch* data);
 
-  static std::unique_ptr<SessionObjectJSON> XSessionMigration(
-      uint64_t sessionId, XSessionMigate* data);
+  static const XLiveAPI::SessionJSON SessionDetails(xe::be<uint64_t> sessionId);
 
-  static std::unique_ptr<ArbitrationObjectJSON> XSessionArbitration(
-      uint64_t sessionId);
+  static XLiveAPI::SessionJSON XSessionMigration(xe::be<uint64_t> sessionId);
 
-  static void SessionWriteStats(uint64_t sessionId, XSessionWriteStats* stats,
-                                XSessionViewProperties* probs);
+  static char* XSessionArbitration(xe::be<uint64_t> sessionId);
 
-  static std::unique_ptr<HTTPResponseObjectJSON> LeaderboardsFind(
-      const uint8_t* data);
+  static void XLiveAPI::SessionWriteStats(xe::be<uint64_t> sessionId,
+                                          XSessionWriteStats* stats,
+                                          XSessionViewProperties* probs);
 
-  static void DeleteSession(uint64_t sessionId);
+  static XLiveAPI::memory LeaderboardsFind(const char* data);
 
-  static void DeleteAllSessionsByMac();
+  static void DeleteSession(xe::be<uint64_t> sessionId);
 
   static void DeleteAllSessions();
 
-  static void XSessionCreate(uint64_t sessionId, XSessionData* data);
+  static void XSessionCreate(xe::be<uint64_t> sessionId, XSesion* data);
 
-  static std::unique_ptr<SessionObjectJSON> XSessionGet(uint64_t sessionId);
+  static XLiveAPI::SessionJSON XSessionGet(xe::be<uint64_t> sessionId);
 
-  static std::vector<X_TITLE_SERVER> GetServers();
+  static std::vector<XLiveAPI::XTitleServer> GetServers();
 
-  static HTTP_STATUS_CODE GetServiceInfoById(
-      uint32_t serviceId, X_ONLINE_SERVICE_INFO* session_info);
+  static XLiveAPI::XONLINE_SERVICE_INFO GetServiceInfoById(
+      xe::be<uint32_t> serviceId);
 
-  static void SessionJoinRemote(
-      uint64_t sessionId, const std::unordered_map<uint64_t, bool> members);
+  static void SessionJoinRemote(xe::be<uint64_t> sessionId, const char* data);
 
-  static void SessionLeaveRemote(uint64_t sessionId,
-                                 const std::vector<xe::be<uint64_t>> xuids);
+  static void SessionLeaveRemote(xe::be<uint64_t> sessionId, const char* data);
 
-  static std::unique_ptr<FriendsPresenceObjectJSON> GetFriendsPresence(
-      const std::vector<uint64_t>& xuids);
+  static unsigned char* GenerateMacAddress();
 
-  static std::unique_ptr<HTTPResponseObjectJSON> PraseResponse(
-      response_data response);
+  static unsigned char* GetMACaddress();
 
-  static const uint8_t* GenerateMacAddress();
-
-  static const uint8_t* GetMACaddress();
-
-  static std::string GetNetworkFriendlyName(IP_ADAPTER_ADDRESSES adapter);
-
-  static void DiscoverNetworkInterfaces();
-
-  static bool UpdateNetworkInterface(sockaddr_in local_ip,
-                                     IP_ADAPTER_ADDRESSES adapter);
-
-  static void SelectNetworkInterface();
+  static bool UpdateQoSCache(const xe::be<uint64_t> sessionId,
+                             const std::vector<char> qos_payload,
+                             const uint32_t payload_size);
 
   static const sockaddr_in LocalIP() { return local_ip_; };
   static const sockaddr_in OnlineIP() { return online_ip_; };
@@ -162,54 +309,36 @@ class XLiveAPI {
   static const std::string LocalIP_str() { return ip_to_string(local_ip_); };
   static const std::string OnlineIP_str() { return ip_to_string(online_ip_); };
 
-  inline static UPnP* upnp_handler = nullptr;
+  inline static upnp upnp_handler;
 
-  inline static MacAddress* mac_address_ = nullptr;
+  inline static unsigned char* mac_address = new unsigned char[6];
 
-  inline static bool xlsp_servers_cached = false;
-  inline static std::vector<X_TITLE_SERVER> xlsp_servers{};
+  inline static std::map<xe::be<uint32_t>, xe::be<uint64_t>> sessionHandleMap{};
 
-  inline static std::string interface_name;
-
-  inline static std::vector<uint8_t> adapter_addresses_buf{};
-
-  inline static std::vector<IP_ADAPTER_ADDRESSES> adapter_addresses{};
-
-  inline static bool adapter_has_wan_routing = false;
-
-  inline static std::map<uint32_t, uint64_t> sessionIdCache{};
-  inline static std::map<uint32_t, uint64_t> macAddressCache{};
-  inline static std::map<uint64_t, std::vector<uint8_t>> qos_payload_cache{};
-
-  inline static xe::be<uint64_t> systemlink_id = 0;
-
-  inline static bool xuid_mismatch = false;
-
-  inline static uint32_t dummy_friends_count = 0;
+  inline static std::map<xe::be<uint32_t>, xe::be<uint64_t>> machineIdCache{};
+  inline static std::map<xe::be<uint32_t>, xe::be<uint64_t>> sessionIdCache{};
+  inline static std::map<xe::be<uint32_t>, xe::be<uint64_t>> macAddressCache{};
+  inline static std::map<xe::be<uint64_t>, std::vector<char>>
+      qos_payload_cache{};
 
   inline static int8_t version_status;
 
  private:
-  inline static const std::string default_local_server_ = "192.168.0.1:36000/";
+  inline static bool active_ = false;
 
-  inline static const std::string default_public_server_ =
-      "https://xenia-netplay-2a0298c0e3f4.herokuapp.com/";
+  // std::shared_mutex mutex_;
 
-  inline static InitState initialized_ = InitState::Pending;
+  static memory Get(std::string endpoint);
 
-  static std::unique_ptr<HTTPResponseObjectJSON> Get(
-      std::string endpoint, const uint32_t timeout = 0);
+  static memory Post(std::string endpoint, const char* data,
+                     size_t data_size = 0);
 
-  static std::unique_ptr<HTTPResponseObjectJSON> Post(std::string endpoint,
-                                                      const uint8_t* data,
-                                                      size_t data_size = 0);
-
-  static std::unique_ptr<HTTPResponseObjectJSON> Delete(std::string endpoint);
+  static memory Delete(std::string endpoint);
 
   // https://curl.se/libcurl/c/CURLOPT_WRITEFUNCTION.html
   static size_t callback(void* data, size_t size, size_t nmemb, void* clientp) {
     size_t realsize = size * nmemb;
-    struct response_data* mem = (struct response_data*)clientp;
+    struct memory* mem = (struct memory*)clientp;
 
     char* ptr = (char*)realloc(mem->response, mem->size + realsize + 1);
     if (ptr == NULL) return 0; /* out of memory! */
@@ -222,11 +351,9 @@ class XLiveAPI {
     return realsize;
   };
 
-  inline static sockaddr_in online_ip_{};
+  inline static sockaddr_in online_ip_;
 
-  inline static sockaddr_in local_ip_{};
+  inline static sockaddr_in local_ip_;
 };
 }  // namespace kernel
 }  // namespace xe
-
-#endif  // XENIA_KERNEL_XLIVEAPI_H_
