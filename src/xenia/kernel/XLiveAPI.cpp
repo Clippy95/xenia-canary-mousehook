@@ -2,29 +2,30 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2023 Ben Vanik. All rights reserved.                             *
+ * Copyright 2023 Xenia Emulator. All rights reserved.                        *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
 #include <random>
 
-#include "util/shim_utils.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
+#include "xenia/kernel/util/shim_utils.h"
 
 #include "xenia/kernel/XLiveAPI.h"
+#include "xenia/kernel/xam/xam_net.h"
 
-#ifdef WIN32
+#ifdef XE_PLATFORM_WIN32
 #include <IPTypes.h>
 #include <iphlpapi.h>
-#endif  // WIN32
+#endif  // XE_PLATFORM_WIN32
 
 DEFINE_string(api_address, "127.0.0.1:36000", "Xenia Master Server Address",
               "Live");
 
-DEFINE_bool(logging, false, "Log Network Activity", "Live");
+DEFINE_bool(logging, false, "Log Network Activity & Stats", "Live");
 
 DEFINE_bool(log_mask_ips, true, "Do not include P2P IPs inside the log",
             "Live");
@@ -33,27 +34,40 @@ DEFINE_bool(offline_mode, false, "Offline Mode", "Live");
 
 DECLARE_bool(upnp);
 
-using namespace xe::string_util;
 using namespace rapidjson;
 
-// libcurl + wolfssl + TLS Support
-//
 // TODO:
 // LeaderboardsFind
-// XSessionArbitration
 //
-// Use the overlapped task for asynchronous curl requests.
-// asynchronous UPnP
+// libcurl + wolfssl + TLS Support
+//
 // JSON deserialization instead of structs
-// XSession Object
-// Fix ObDereferenceObject_entry and XamSessionRefObjByHandle_entry
-// API endpoint lookup table
+// Asynchronous UPnP
+// Use the overlapped task for asynchronous curl requests.
 // Improve GetMACaddress()
+// API endpoint lookup table
+//
+// How is systemlink state determined?
+// Extract stat descriptions from XDBF.
+// Profiles have offline and online XUIDs we only use online.
 
 // https://patents.google.com/patent/US20060287099A1
 namespace xe {
 namespace kernel {
+
+uint64_t XLiveAPI::GetMachineId() {
+  auto macAddress = mac_address_->to_uint64();
+  auto macAddressUint = *reinterpret_cast<uint64_t*>(&macAddress);
+
+  uint64_t machineId = 0xFA00000000000000;
+  machineId |= macAddressUint;
+
+  return machineId;
+}
+
 bool XLiveAPI::is_active() { return active_; }
+
+bool XLiveAPI::is_initialized() { return initialized_; }
 
 std::string XLiveAPI::GetApiAddress() {
   // Add forward slash if not already added
@@ -74,42 +88,16 @@ uint16_t XLiveAPI::GetPlayerPort() { return 36000; }
 int8_t XLiveAPI::GetVersionStatus() { return version_status; }
 
 void XLiveAPI::Init() {
-  if (cvars::offline_mode) {
+  // Only initialize once
+  if (is_initialized()) {
     return;
-  }
-
-  // Only initialise once
-  if (is_active()) {
-    return;
-  }
-
-  GetLocalIP();
-  Getwhoami();
-  DownloadPortMappings();
-
-  mac_address = GetMACaddress();
-
-  // Must get mac address and IP before registering.
-  RegisterPlayer();
-
-  // If player already exists on server then no need to post it again?
-  FindPlayers();
-
-  if (cvars::upnp && !upnp_handler.is_active()) {
-    upnp_handler.upnp_init();
   }
 
   if (cvars::logging) {
-    if (upnp_handler.is_active()) {
-      XELOGI("UPnP Enabled");
-    } else {
-      XELOGI("UPnP Disabled");
-    }
-
     curl_version_info_data* vinfo = curl_version_info(CURLVERSION_NOW);
 
-    XELOGI("libcurl version {}.{}.{}\n", (vinfo->version_num >> 16) & 0xff,
-           (vinfo->version_num >> 8) & 0xff, vinfo->version_num & 0xff);
+    XELOGI("libcurl version {}.{}.{}\n", (vinfo->version_num >> 16) & 0xFF,
+           (vinfo->version_num >> 8) & 0xFF, vinfo->version_num & 0xFF);
 
     if (vinfo->features & CURL_VERSION_SSL) {
       XELOGI("SSL support enabled");
@@ -119,22 +107,47 @@ void XLiveAPI::Init() {
     }
   }
 
-  active_ = true;
-}
+  GetLocalIP();
 
-void XLiveAPI::RandomBytes(unsigned char* buffer_ptr, uint32_t length) {
-  std::random_device rd;
-  std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFFu);
-  std::vector<char> data(length);
-  int offset = 0;
-  uint32_t bits = 0;
+  mac_address_ = new MacAddress(GetMACaddress());
+  XELOGI("MAC ADDRESS: {}", mac_address_->to_printable_form());
 
-  for (unsigned int i = 0; i < length; i++) {
-    if (offset == 0) bits = dist(rd);
-    *(unsigned char*)(buffer_ptr + i) = static_cast<unsigned char>(bits & 0xFF);
-    bits >>= 8;
-    if (++offset >= 4) offset = 0;
+  if (cvars::offline_mode) {
+    XELOGI("Offline mode enabled!");
+    initialized_ = true;
+    return;
   }
+
+  Getwhoami();
+
+  if (!IsOnline()) {
+    XELOGI("Cannot access API server.");
+    initialized_ = true;
+    return;
+  }
+
+  // Download ports mappings before initializing UPnP.
+  DownloadPortMappings();
+
+  if (cvars::upnp) {
+    upnp_handler.upnp_init();
+  }
+
+  // Must get mac address and IP before registering.
+  auto reg_result = RegisterPlayer();
+
+  // If player already exists on server then no need to post it again?
+  auto player = FindPlayers();
+
+  if (reg_result.http_code == HTTP_STATUS_CODE::HTTP_CREATED &&
+      player.xuid != 0) {
+    active_ = true;
+  }
+
+  initialized_ = true;
+
+  // Delete sessions on start-up.
+  DeleteAllSessions();
 }
 
 void XLiveAPI::clearXnaddrCache() {
@@ -191,7 +204,7 @@ XLiveAPI::memory XLiveAPI::Get(std::string endpoint) {
   curl_easy_cleanup(curl_handle);
   curl_slist_free_all(headers);
 
-  if (CURLE_OK == result && chunk.http_code == 200) {
+  if (CURLE_OK == result && chunk.http_code == HTTP_STATUS_CODE::HTTP_OK) {
     return chunk;
   }
 
@@ -200,7 +213,7 @@ XLiveAPI::memory XLiveAPI::Get(std::string endpoint) {
 }
 
 // Send data to the server
-XLiveAPI::memory XLiveAPI::Post(std::string endpoint, const char* data,
+XLiveAPI::memory XLiveAPI::Post(std::string endpoint, const uint8_t* data,
                                 size_t data_size) {
   memory chunk = {0};
   CURL* curl_handle = curl_easy_init();
@@ -259,7 +272,7 @@ XLiveAPI::memory XLiveAPI::Post(std::string endpoint, const char* data,
   curl_easy_cleanup(curl_handle);
   curl_slist_free_all(headers);
 
-  if (CURLE_OK == result && chunk.http_code == 201) {
+  if (CURLE_OK == result && chunk.http_code == HTTP_STATUS_CODE::HTTP_CREATED) {
     return chunk;
   }
 
@@ -304,7 +317,7 @@ XLiveAPI::memory XLiveAPI::Delete(std::string endpoint) {
   curl_easy_cleanup(curl_handle);
   curl_slist_free_all(headers);
 
-  if (CURLE_OK == result && chunk.http_code == 200) {
+  if (CURLE_OK == result && chunk.http_code == HTTP_STATUS_CODE::HTTP_OK) {
     return chunk;
   }
 
@@ -316,7 +329,7 @@ XLiveAPI::memory XLiveAPI::Delete(std::string endpoint) {
 sockaddr_in XLiveAPI::Getwhoami() {
   memory chunk = Get("whoami");
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     return online_ip_;
   }
 
@@ -328,7 +341,6 @@ sockaddr_in XLiveAPI::Getwhoami() {
 
   XELOGI("Requesting Public IP");
 
-  // free(chunk.response);
   return online_ip_;
 }
 
@@ -345,7 +357,7 @@ sockaddr_in XLiveAPI::GetLocalIP() {
   addrin.sin_family = AF_INET;
   addrin.sin_port = htons(50);
 
-  inet_pton(AF_INET, "8.8.8.8", &(addrin.sin_addr));
+  inet_pton(AF_INET, "8.8.8.8", &addrin.sin_addr);
 
   if (connect(sock, (sockaddr*)&addrin, sizeof(addrin)) < 0) {
     closesocket(sock);
@@ -362,20 +374,13 @@ sockaddr_in XLiveAPI::GetLocalIP() {
   return addrin;
 }
 
-const std::string XLiveAPI::ip_to_string(sockaddr_in sockaddr) {
-  char ip_str[INET_ADDRSTRLEN];
-  inet_ntop(AF_INET, &sockaddr.sin_addr, ip_str, INET_ADDRSTRLEN);
-
-  return ip_str;
-}
-
 void XLiveAPI::DownloadPortMappings() {
   std::string endpoint =
-      fmt::format("title/{:x}/ports", kernel_state()->title_id());
+      fmt::format("title/{:08X}/ports", kernel_state()->title_id());
 
   memory chunk = Get(endpoint);
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     assert_always();
     return;
   }
@@ -397,111 +402,63 @@ void XLiveAPI::DownloadPortMappings() {
     }
   }
 
-  XELOGI("Requesting Port Mappings");
-}
-
-xe::be<uint64_t> XLiveAPI::MacAddresstoUint64(const unsigned char* macAddress) {
-  xe::be<uint64_t> macAddress64 = 0;
-
-  for (int i = 5; i >= 0; --i) {
-    macAddress64 = macAddress64 << 8;
-    macAddress64 |= (uint64_t)macAddress[5 - i];
-  }
-
-  return macAddress64;
-}
-
-void XLiveAPI::Uint64toSessionId(xe::be<uint64_t> sessionID,
-                                 unsigned char* sessionIdOut) {
-  for (int i = 0; i < 8; i++) {
-    sessionIdOut[7 - i] = ((sessionID >> (8 * i)) & 0xFF);
-  }
-}
-
-void XLiveAPI::Uint64toMacAddress(xe::be<uint64_t> macAddress,
-                                  unsigned char* macAddressOut) {
-  for (int i = 0; i < 6; i++) {
-    macAddressOut[5 - i] = ((macAddress >> (8 * i)) & 0xFF);
-  }
-}
-
-uint64_t XLiveAPI::GetMachineId() {
-  auto macAddress = mac_address;
-
-  uint64_t machineId = 0;
-  for (int i = 5; i >= 0; --i) {
-    machineId = machineId << 8;
-    machineId |= macAddress[5 - i];
-  }
-
-  machineId += 0xFA00000000000000;
-
-  return machineId;
+  XELOGI("Requested Port Mappings");
+  return;
 }
 
 // Add player to web server
 // A random mac address is changed every time a player is registered!
 // xuid + ip + mac = unique player on a network
-void XLiveAPI::RegisterPlayer() {
-  assert_not_null(mac_address);
+XLiveAPI::memory XLiveAPI::RegisterPlayer() {
+  assert_not_null(mac_address_);
 
-  if (!mac_address) {
+  memory chunk{};
+
+  if (!mac_address_) {
     XELOGE("Cancelled Registering Player");
-    return;
+    return chunk;
   }
 
   Document doc;
   doc.SetObject();
-
-  std::string mac_address_str =
-      fmt::format("{:012x}", MacAddresstoUint64(mac_address));
 
   std::string machineId_str = fmt::format("{:06x}", GetMachineId());
 
   const uint32_t index = 0;
 
   if (!kernel_state()->xam_state()->IsUserSignedIn(index)) {
-    return;
+    return chunk;
   }
 
   // User index hard-coded
   uint64_t xuid_val = kernel_state()->xam_state()->GetUserProfile(index)->xuid();
-  std::string xuid = to_hex_string(xuid_val);
+  std::string xuid = string_util::to_hex_string(xuid_val);
 
   doc.AddMember("xuid", xuid, doc.GetAllocator());
   doc.AddMember("machineId", machineId_str, doc.GetAllocator());
   doc.AddMember("hostAddress", OnlineIP_str(), doc.GetAllocator());
-  doc.AddMember("macAddress", mac_address_str, doc.GetAllocator());
+  doc.AddMember("macAddress", mac_address_->to_string(), doc.GetAllocator());
 
   rapidjson::StringBuffer buffer;
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post("players", buffer.GetString());
+  chunk = Post("players", (uint8_t*)buffer.GetString());
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     assert_always();
-    return;
+    return chunk;
   }
 
   XELOGI("POST Success");
-}
 
-uint64_t XLiveAPI::hex_to_uint64(const char* hex) {
-  uint64_t result = strtoull(hex, NULL, 16);
-
-  if (result == 0 || result == ULLONG_MAX) {
-    // Failed to convert
-    return 0;
-  }
-
-  return result;
+  return chunk;
 }
 
 // Request clients player info via IP address
 // This should only be called once on startup no need to request our information
 // more than once.
-XLiveAPI::Player XLiveAPI::FindPlayers() {
+Player XLiveAPI::FindPlayers() {
   Player data{};
 
   Document doc;
@@ -513,9 +470,9 @@ XLiveAPI::Player XLiveAPI::FindPlayers() {
   doc.Accept(writer);
 
   // POST & receive.
-  memory chunk = Post("players/find", buffer.GetString());
+  memory chunk = Post("players/find", (uint8_t*)buffer.GetString());
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("FindPlayers POST Failed!");
 
     assert_always();
@@ -524,24 +481,26 @@ XLiveAPI::Player XLiveAPI::FindPlayers() {
 
   doc.Swap(doc.Parse(chunk.response));
 
-  data.xuid = doc["xuid"].GetString();
+  data.xuid = string_util::from_string<uint64_t>(doc["xuid"].GetString(), true);
   data.hostAddress = doc["hostAddress"].GetString();
   data.port = doc["port"].GetUint();
 
-  unsigned char macAddress[6];
-  strcpy((char*)macAddress, (const char*)doc["macAddress"].GetString());
-  data.macAddress = MacAddresstoUint64(macAddress);
+  MacAddress address =
+      MacAddress((const uint8_t*)doc["macAddress"].GetString());
+  data.macAddress = address.to_uint64();
 
-  data.sessionId = hex_to_uint64(doc["sessionId"].GetString());
-  data.machineId = hex_to_uint64(doc["machineId"].GetString());
+  data.sessionId =
+      string_util::from_string<uint64_t>(doc["sessionId"].GetString(), true);
+  data.machineId =
+      string_util::from_string<uint64_t>(doc["machineId"].GetString(), true);
 
   XELOGI("Requesting player details.");
 
   return data;
 }
 
-bool XLiveAPI::UpdateQoSCache(const xe::be<uint64_t> sessionId,
-                              const std::vector<char> qos_payload,
+bool XLiveAPI::UpdateQoSCache(const uint64_t sessionId,
+                              const std::vector<uint8_t> qos_payload,
                               const uint32_t payload_size) {
   if (qos_payload_cache[sessionId] != qos_payload) {
     qos_payload_cache[sessionId] = qos_payload;
@@ -554,14 +513,13 @@ bool XLiveAPI::UpdateQoSCache(const xe::be<uint64_t> sessionId,
 }
 
 // Send QoS binary data to the server
-void XLiveAPI::QoSPost(xe::be<uint64_t> sessionId, char* qosData,
-                       size_t qosLength) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/qos",
+void XLiveAPI::QoSPost(uint64_t sessionId, uint8_t* qosData, size_t qosLength) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/qos",
                                      kernel_state()->title_id(), sessionId);
 
   memory chunk = Post(endpoint, qosData, qosLength);
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     assert_always();
     return;
   }
@@ -570,13 +528,13 @@ void XLiveAPI::QoSPost(xe::be<uint64_t> sessionId, char* qosData,
 }
 
 // Get QoS binary data from the server
-XLiveAPI::memory XLiveAPI::QoSGet(xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/qos",
+XLiveAPI::memory XLiveAPI::QoSGet(uint64_t sessionId) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/qos",
                                      kernel_state()->title_id(), sessionId);
 
   memory chunk = Get(endpoint);
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("QoSGet GET Failed!");
 
     assert_always();
@@ -588,8 +546,8 @@ XLiveAPI::memory XLiveAPI::QoSGet(xe::be<uint64_t> sessionId) {
   return chunk;
 }
 
-void XLiveAPI::SessionModify(xe::be<uint64_t> sessionId, XSessionModify* data) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/modify",
+void XLiveAPI::SessionModify(uint64_t sessionId, XSessionModify* data) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/modify",
                                      kernel_state()->title_id(), sessionId);
 
   Document doc;
@@ -605,9 +563,9 @@ void XLiveAPI::SessionModify(xe::be<uint64_t> sessionId, XSessionModify* data) {
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("Modify Post Failed!");
     assert_always();
     return;
@@ -616,10 +574,10 @@ void XLiveAPI::SessionModify(xe::be<uint64_t> sessionId, XSessionModify* data) {
   XELOGI("Send Modify data.");
 }
 
-const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearchEx(
+const std::vector<SessionJSON> XLiveAPI::SessionSearchEx(
     XSessionSearchEx* data) {
   std::string endpoint =
-      fmt::format("title/{:x}/sessions/search", kernel_state()->title_id());
+      fmt::format("title/{:08X}/sessions/search", kernel_state()->title_id());
 
   Document doc;
   doc.SetObject();
@@ -631,11 +589,11 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearchEx(
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
 
   std::vector<SessionJSON> sessions{};
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("SessionSearchEx POST Failed!");
     assert_always();
 
@@ -646,16 +604,12 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearchEx(
 
   const Value& sessionsJsonArray = doc.GetArray();
 
-  unsigned int i = 0;
-
   for (Value::ConstValueIterator object_ptr = sessionsJsonArray.Begin();
        object_ptr != sessionsJsonArray.End(); ++object_ptr) {
     SessionJSON session{};
 
-    std::vector<uint8_t> session_id{};
-    hex_string_to_array(session_id, (*object_ptr)["id"].GetString());
-    session.sessionid = std::string(session_id.begin(), session_id.end());
-
+    session.sessionid = string_util::from_string<uint64_t>(
+        (*object_ptr)["id"].GetString(), true);
     session.port = (*object_ptr)["port"].GetInt();
 
     session.openPublicSlotsCount =
@@ -669,10 +623,7 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearchEx(
         (*object_ptr)["filledPrivateSlotsCount"].GetInt();
 
     session.hostAddress = (*object_ptr)["hostAddress"].GetString();
-
-    std::vector<uint8_t> mac{};
-    hex_string_to_array(mac, (*object_ptr)["macAddress"].GetString());
-    session.macAddress = std::string(mac.begin(), mac.end());
+    session.macAddress = (*object_ptr)["macAddress"].GetString();
 
     session.publicSlotsCount = (*object_ptr)["publicSlotsCount"].GetInt();
     session.privateSlotsCount = (*object_ptr)["privateSlotsCount"].GetInt();
@@ -686,10 +637,9 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearchEx(
   return sessions;
 }
 
-const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearch(
-    XSessionSearch* data) {
+const std::vector<SessionJSON> XLiveAPI::SessionSearch(XSessionSearch* data) {
   std::string endpoint =
-      fmt::format("title/{:x}/sessions/search", kernel_state()->title_id());
+      fmt::format("title/{:08X}/sessions/search", kernel_state()->title_id());
 
   Document doc;
   doc.SetObject();
@@ -701,11 +651,11 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearch(
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
 
   std::vector<SessionJSON> sessions{};
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("SessionSearch POST Failed!");
     assert_always();
 
@@ -722,10 +672,8 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearch(
        object_ptr != sessionsJsonArray.End(); ++object_ptr) {
     SessionJSON session{};
 
-    std::vector<uint8_t> session_id{};
-    hex_string_to_array(session_id, (*object_ptr)["id"].GetString());
-    session.sessionid = std::string(session_id.begin(), session_id.end());
-
+    session.sessionid = string_util::from_string<uint64_t>(
+        (*object_ptr)["id"].GetString(), true);
     session.port = (*object_ptr)["port"].GetInt();
 
     session.openPublicSlotsCount =
@@ -739,10 +687,7 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearch(
         (*object_ptr)["filledPrivateSlotsCount"].GetInt();
 
     session.hostAddress = (*object_ptr)["hostAddress"].GetString();
-
-    std::vector<uint8_t> mac{};
-    hex_string_to_array(mac, (*object_ptr)["macAddress"].GetString());
-    session.macAddress = std::string(mac.begin(), mac.end());
+    session.macAddress = (*object_ptr)["macAddress"].GetString();
 
     session.publicSlotsCount = (*object_ptr)["publicSlotsCount"].GetInt();
     session.privateSlotsCount = (*object_ptr)["privateSlotsCount"].GetInt();
@@ -756,16 +701,15 @@ const std::vector<XLiveAPI::SessionJSON> XLiveAPI::SessionSearch(
   return sessions;
 }
 
-const XLiveAPI::SessionJSON XLiveAPI::SessionDetails(
-    xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/details",
+const SessionJSON XLiveAPI::SessionDetails(uint64_t sessionId) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/details",
                                      kernel_state()->title_id(), sessionId);
 
   memory chunk = Get(endpoint);
 
   SessionJSON session{};
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("SessionDetails error code {}", chunk.http_code);
     XELOGE("SessionDetails not found e.g. Invalid sessionId");
 
@@ -776,7 +720,8 @@ const XLiveAPI::SessionJSON XLiveAPI::SessionDetails(
   Document doc;
   doc.Parse(chunk.response);
 
-  session.sessionid = doc["id"].GetString();
+  session.sessionid =
+      string_util::from_string<uint64_t>(doc["id"].GetString(), true);
   session.port = doc["port"].GetInt();
 
   session.openPublicSlotsCount = doc["openPublicSlotsCount"].GetInt();
@@ -798,7 +743,7 @@ const XLiveAPI::SessionJSON XLiveAPI::SessionDetails(
        object_ptr != playersArray.End(); ++object_ptr) {
     Player Player{};
 
-    Player.xuid = (*object_ptr)["xuid"].GetString();
+    Player.xuid = (*object_ptr)["xuid"].GetInt64();
 
     session.players.push_back(Player);
   }
@@ -808,33 +753,30 @@ const XLiveAPI::SessionJSON XLiveAPI::SessionDetails(
   return session;
 }
 
-XLiveAPI::SessionJSON XLiveAPI::XSessionMigration(xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/migrate",
+SessionJSON XLiveAPI::XSessionMigration(uint64_t sessionId) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/migrate",
                                      kernel_state()->title_id(), sessionId);
 
   Document doc;
   doc.SetObject();
 
-  std::string mac_address_str =
-      fmt::format("{:012x}", MacAddresstoUint64(mac_address));
-
   doc.AddMember("hostAddress", OnlineIP_str(), doc.GetAllocator());
-  doc.AddMember("macAddress", mac_address_str, doc.GetAllocator());
+  doc.AddMember("macAddress", mac_address_->to_string(), doc.GetAllocator());
   doc.AddMember("port", GetPlayerPort(), doc.GetAllocator());
 
   rapidjson::StringBuffer buffer;
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
 
   SessionJSON session{};
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("XSessionMigration POST Failed!");
     assert_always();
 
-    if (chunk.http_code == 404) {
+    if (chunk.http_code == HTTP_STATUS_CODE::HTTP_NOT_FOUND) {
       std::string session_id =
           fmt::format("{:016x}", kernel_state()->title_id(), sessionId);
 
@@ -847,7 +789,8 @@ XLiveAPI::SessionJSON XLiveAPI::XSessionMigration(xe::be<uint64_t> sessionId) {
 
   doc.Swap(doc.Parse(chunk.response));
 
-  session.sessionid = doc["id"].GetString();
+  session.sessionid =
+      string_util::from_string<uint64_t>(doc["id"].GetString(), true);
   session.hostAddress = doc["hostAddress"].GetString();
   session.macAddress = doc["macAddress"].GetString();
   session.port = GetPlayerPort();
@@ -857,35 +800,54 @@ XLiveAPI::SessionJSON XLiveAPI::XSessionMigration(xe::be<uint64_t> sessionId) {
   return session;
 }
 
-char* XLiveAPI::XSessionArbitration(xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/arbitration",
-                                     kernel_state()->title_id(), sessionId);
+XSessionArbitrationJSON XLiveAPI::XSessionArbitration(uint64_t sessionId) {
+  std::string endpoint =
+      fmt::format("title/{:08X}/sessions/{:016x}/arbitration",
+                  kernel_state()->title_id(), sessionId);
+
+  XSessionArbitrationJSON result = {};
 
   memory chunk = Get(endpoint);
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("XSessionMigration GET Failed!");
     assert_always();
 
-    return chunk.response;
+    return result;
   }
 
-  // Document doc;
-  // doc.Parse(chunk.response);
+  rapidjson::Document doc;
+  doc.Parse(chunk.response);
 
-  // struct ArbitrationInfo {
-  //   std::vector<int> machines;
-  //   uint32_t totalPlayers;
-  // };
+  result.totalPlayers = doc["totalPlayers"].GetInt();
 
-  return chunk.response;
+  const auto machinesArray = doc["machines"].GetArray();
+
+  for (const auto& machine : machinesArray) {
+    MachineInfo machine_info;
+
+    machine_info.machineId =
+        string_util::from_string<uint64_t>(machine["id"].GetString(), true);
+
+    const auto playersArray = machine["players"].GetArray();
+    machine_info.playerCount = playersArray.Size();
+
+    for (const auto& player : playersArray) {
+      std::vector<uint8_t> pId;
+      xe::string_util::hex_string_to_array(pId, player["xuid"].GetString());
+      machine_info.xuids.push_back(*reinterpret_cast<uint64_t*>(pId.data()));
+    }
+
+    result.machines.push_back(machine_info);
+  }
+  return result;
 }
 
-void XLiveAPI::SessionWriteStats(xe::be<uint64_t> sessionId,
-                                 XSessionWriteStats* stats,
+void XLiveAPI::SessionWriteStats(uint64_t sessionId, XSessionWriteStats* stats,
                                  XSessionViewProperties* leaderboard) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/leaderboards",
-                                     kernel_state()->title_id(), sessionId);
+  std::string endpoint =
+      fmt::format("title/{:08X}/sessions/{:016x}/leaderboards",
+                  kernel_state()->title_id(), sessionId);
 
   Document rootObject;
   rootObject.SetObject();
@@ -908,23 +870,22 @@ void XLiveAPI::SessionWriteStats(xe::be<uint64_t> sessionId,
          statisticIndex++) {
       Value statObject(kObjectType);
 
-      statObject.AddMember("type", statistics[statisticIndex].value.type,
-                           rootObject.GetAllocator());
+      statObject.AddMember(
+          "type", static_cast<uint32_t>(statistics[statisticIndex].data.type),
+          rootObject.GetAllocator());
 
-      switch (statistics[statisticIndex].value.type) {
-        case 1:
-          statObject.AddMember("value",
-                               statistics[statisticIndex].value.dword_data,
+      switch (statistics[statisticIndex].data.type) {
+        case X_USER_DATA_TYPE::INT32:
+          statObject.AddMember("value", statistics[statisticIndex].data.s32,
                                rootObject.GetAllocator());
           break;
-        case 2:
-          statObject.AddMember("value",
-                               statistics[statisticIndex].value.qword_data,
+        case X_USER_DATA_TYPE::INT64:
+          statObject.AddMember("value", statistics[statisticIndex].data.s64,
                                rootObject.GetAllocator());
           break;
         default:
-          XELOGW("Unimplemented statistic type for write",
-                 statistics[statisticIndex].value.type);
+          XELOGW("Unimplemented statistic type for write {}",
+                 statistics[statisticIndex].data.type);
           break;
       }
 
@@ -953,9 +914,13 @@ void XLiveAPI::SessionWriteStats(xe::be<uint64_t> sessionId,
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   rootObject.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  if (cvars::logging) {
+    XELOGI("SessionWriteStats:\n\n{}", buffer.GetString());
+  }
 
-  if (chunk.http_code != 201) {
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
+
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("SessionWriteStats POST Failed!");
     // assert_always();
 
@@ -963,12 +928,12 @@ void XLiveAPI::SessionWriteStats(xe::be<uint64_t> sessionId,
   }
 }
 
-XLiveAPI::memory XLiveAPI::LeaderboardsFind(const char* data) {
+XLiveAPI::memory XLiveAPI::LeaderboardsFind(const uint8_t* data) {
   std::string endpoint = fmt::format("leaderboards/find");
 
   memory chunk = Post(endpoint, data);
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("LeaderboardsFind POST Failed!");
     assert_always();
   }
@@ -976,14 +941,14 @@ XLiveAPI::memory XLiveAPI::LeaderboardsFind(const char* data) {
   return chunk;
 }
 
-void XLiveAPI::DeleteSession(xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}",
+void XLiveAPI::DeleteSession(uint64_t sessionId) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}",
                                      kernel_state()->title_id(), sessionId);
 
   memory chunk = Delete(endpoint);
 
-  if (chunk.http_code != 200) {
-    XELOGI("Failed to delete session {:x}", sessionId);
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
+    XELOGI("Failed to delete session {:08X}", sessionId);
     // assert_always();
   }
 
@@ -991,27 +956,39 @@ void XLiveAPI::DeleteSession(xe::be<uint64_t> sessionId) {
   qos_payload_cache.erase(sessionId);
 }
 
-void XLiveAPI::DeleteAllSessions() {
-  memory chunk = Delete("DeleteSessions");
+void XLiveAPI::DeleteAllSessionsByMac() {
+  if (!is_active()) return;
 
-  if (chunk.http_code != 200) {
+  const std::string endpoint =
+      fmt::format("DeleteSessions/{}", mac_address_->to_string());
+
+  memory chunk = Delete(endpoint);
+
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGI("Failed to delete all sessions");
   }
 }
 
-void XLiveAPI::XSessionCreate(xe::be<uint64_t> sessionId, XSesion* data) {
+void XLiveAPI::DeleteAllSessions() {
+  if (!is_active()) return;
+
+  const std::string endpoint = fmt::format("DeleteSessions");
+
+  memory chunk = Delete(endpoint);
+
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
+    XELOGI("Failed to delete all sessions");
+  }
+}
+
+void XLiveAPI::XSessionCreate(uint64_t sessionId, XSessionData* data) {
   std::string endpoint =
-      fmt::format("title/{:x}/sessions", kernel_state()->title_id());
+      fmt::format("title/{:08X}/sessions", kernel_state()->title_id());
 
   Document doc;
   doc.SetObject();
 
   std::string sessionId_str = fmt::format("{:016x}", sessionId);
-
-  std::string mac_address_str =
-      fmt::format("{:012x}", MacAddresstoUint64(mac_address));
-
-  assert_true(mac_address_str.size() == 12);
   assert_true(sessionId_str.size() == 16);
 
   doc.AddMember("sessionId", sessionId_str, doc.GetAllocator());
@@ -1021,33 +998,33 @@ void XLiveAPI::XSessionCreate(xe::be<uint64_t> sessionId, XSesion* data) {
                 doc.GetAllocator());
   doc.AddMember("userIndex", data->user_index, doc.GetAllocator());
   doc.AddMember("hostAddress", OnlineIP_str(), doc.GetAllocator());
-  doc.AddMember("macAddress", mac_address_str, doc.GetAllocator());
+  doc.AddMember("macAddress", mac_address_->to_string(), doc.GetAllocator());
   doc.AddMember("port", GetPlayerPort(), doc.GetAllocator());
 
   rapidjson::StringBuffer buffer;
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc.Accept(writer);
 
-  memory chunk = Post(endpoint, buffer.GetString());
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
 
-  if (chunk.http_code != 201) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGI("XSessionCreate POST Failed!");
     assert_always();
     return;
   }
 
-  XELOGI("XSessionCreate Success");
+  XELOGI("XSessionCreate POST Success");
 }
 
-XLiveAPI::SessionJSON XLiveAPI::XSessionGet(xe::be<uint64_t> sessionId) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}",
+SessionJSON XLiveAPI::XSessionGet(uint64_t sessionId) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}",
                                      kernel_state()->title_id(), sessionId);
 
   SessionJSON session = SessionJSON{};
 
   memory chunk = Get(endpoint);
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("XSessionGet error code: {}", chunk.http_code);
     assert_always();
 
@@ -1058,25 +1035,22 @@ XLiveAPI::SessionJSON XLiveAPI::XSessionGet(xe::be<uint64_t> sessionId) {
   doc.Parse(chunk.response);
 
   session.hostAddress = doc["hostAddress"].GetString();
-
-  std::vector<uint8_t> mac{};
-  hex_string_to_array(mac, doc["macAddress"].GetString());
-  session.macAddress = std::string(mac.begin(), mac.end());
+  session.macAddress = doc["macAddress"].GetString();
 
   session.port = GetPlayerPort();
 
   return session;
 }
 
-std::vector<XLiveAPI::XTitleServer> XLiveAPI::GetServers() {
+std::vector<XTitleServer> XLiveAPI::GetServers() {
   std::string endpoint =
-      fmt::format("title/{:x}/servers", kernel_state()->title_id());
+      fmt::format("title/{:08X}/servers", kernel_state()->title_id());
 
   memory chunk = Get(endpoint);
 
   std::vector<XTitleServer> servers{};
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("GetServers error code: {}", chunk.http_code);
     assert_always();
 
@@ -1090,7 +1064,7 @@ std::vector<XLiveAPI::XTitleServer> XLiveAPI::GetServers() {
     XTitleServer server{};
 
     inet_pton(AF_INET, server_data["address"].GetString(),
-              &(server.server_address));
+              &server.server_address);
 
     server.flags = server_data["flags"].GetInt();
 
@@ -1107,16 +1081,15 @@ std::vector<XLiveAPI::XTitleServer> XLiveAPI::GetServers() {
   return servers;
 }
 
-XLiveAPI::XONLINE_SERVICE_INFO XLiveAPI::GetServiceInfoById(
-    xe::be<uint32_t> serviceId) {
-  std::string endpoint = fmt::format("title/{:x}/services/{:08x}",
+XONLINE_SERVICE_INFO XLiveAPI::GetServiceInfoById(uint32_t serviceId) {
+  std::string endpoint = fmt::format("title/{:08X}/services/{:08X}",
                                      kernel_state()->title_id(), serviceId);
 
   memory chunk = Get(endpoint);
 
   XONLINE_SERVICE_INFO service{};
 
-  if (chunk.http_code != 200) {
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("GetServiceById error code: {}", chunk.http_code);
     assert_always();
 
@@ -1132,46 +1105,87 @@ XLiveAPI::XONLINE_SERVICE_INFO XLiveAPI::GetServiceInfoById(
     XELOGD("GetServiceById IP: {}", service_info["address"].GetString());
 
     service.port = service_info["port"].GetInt();
-    service.reserved = 0;
     service.id = serviceId;
   }
 
   return service;
 }
 
-void XLiveAPI::SessionJoinRemote(xe::be<uint64_t> sessionId, const char* data) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/join",
+void XLiveAPI::SessionJoinRemote(uint64_t sessionId,
+                                 const std::vector<std::string> xuids) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/join",
                                      kernel_state()->title_id(), sessionId);
+  Document doc;
+  doc.SetObject();
 
-  memory chunk = Post(endpoint, data);
+  Value xuidsJsonArray(kArrayType);
 
-  if (chunk.http_code != 201) {
+  for each (const auto xuid in xuids) {
+    Value value;
+    value.SetString(xuid.c_str(), 16, doc.GetAllocator());
+
+    xuidsJsonArray.PushBack(value, doc.GetAllocator());
+  }
+
+  doc.AddMember("xuids", xuidsJsonArray, doc.GetAllocator());
+
+  rapidjson::StringBuffer buffer;
+  PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  doc.Accept(writer);
+
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
+
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("SessionJoinRemote error code: {}", chunk.http_code);
     assert_always();
   }
 }
 
-void XLiveAPI::SessionLeaveRemote(xe::be<uint64_t> sessionId,
-                                  const char* data) {
-  std::string endpoint = fmt::format("title/{:x}/sessions/{:016x}/leave",
+void XLiveAPI::SessionLeaveRemote(uint64_t sessionId,
+                                  const std::vector<std::string> xuids) {
+  std::string endpoint = fmt::format("title/{:08X}/sessions/{:016x}/leave",
                                      kernel_state()->title_id(), sessionId);
 
-  memory chunk = Post(endpoint, data);
+  Document doc;
+  doc.SetObject();
 
-  if (chunk.http_code != 201) {
+  Value xuidsJsonArray(kArrayType);
+
+  for each (const auto xuid in xuids) {
+    Value value;
+    value.SetString(xuid.c_str(), 16, doc.GetAllocator());
+
+    xuidsJsonArray.PushBack(value, doc.GetAllocator());
+  }
+
+  doc.AddMember("xuids", xuidsJsonArray, doc.GetAllocator());
+
+  rapidjson::StringBuffer buffer;
+  PrettyWriter<rapidjson::StringBuffer> writer(buffer);
+  doc.Accept(writer);
+
+  memory chunk = Post(endpoint, (uint8_t*)buffer.GetString());
+
+  if (chunk.http_code != HTTP_STATUS_CODE::HTTP_CREATED) {
     XELOGE("SessionLeaveRemote error code: {}", chunk.http_code);
     assert_always();
   }
 }
 
-unsigned char* XLiveAPI::GenerateMacAddress() {
-  unsigned char* mac_address = new unsigned char[6];
-  RandomBytes(mac_address, 6);
+const uint8_t* XLiveAPI::GenerateMacAddress() {
+
+  uint8_t* mac_address = new uint8_t[6];
+  // MAC OUI part for MS devices.
+  mac_address[0] = 0x00;
+  mac_address[1] = 0x22;
+  mac_address[2] = 0x48;
+
+  xam::XNetRandom(mac_address+3, 3);
 
   return mac_address;
 }
 
-unsigned char* XLiveAPI::GetMACaddress() {
+const uint8_t* XLiveAPI::GetMACaddress() {
   XELOGI("Resolving system mac address.");
 
   // Use random mac for now.
