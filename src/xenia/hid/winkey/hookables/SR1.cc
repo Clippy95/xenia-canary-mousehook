@@ -34,15 +34,21 @@ namespace xe {
 namespace hid {
 namespace winkey {
 struct GameBuildAddrs {
+  const char* title_version;
   uint32_t x_address;
-  std::string title_version;
   uint32_t y_address;
+  uint32_t vehicle_address;
+  uint32_t weapon_wheel_address;
+  uint32_t menu_status_address;
+  uint32_t currentFPS_address;
+  uint32_t havok_frametime_address;
 };
 
 std::map<SaintsRow1Game::GameBuild, GameBuildAddrs> supported_builds{
-    {SaintsRow1Game::GameBuild::Unknown, {NULL, "", NULL}},
+    {SaintsRow1Game::GameBuild::Unknown, {" ", NULL, NULL}},
     {SaintsRow1Game::GameBuild::SaintsRow1_TU1,
-     {0x827f9af8, "1.0.1", 0x827F9B00}}};
+     {"1.0.1", 0x827f9af8, 0x827F9B00, 0x827F9A6A, 0x8283CA7B, 0x835F27A3,
+      0x827CA750, 0x835F2684}}};
 
 SaintsRow1Game::~SaintsRow1Game() = default;
 
@@ -73,7 +79,7 @@ float SaintsRow1Game::RadianstoDegree(float radians) {
 }
 
 bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
-                            X_INPUT_STATE* out_state) {
+                             X_INPUT_STATE* out_state) {
   if (!IsGameSupported()) {
     return false;
   }
@@ -81,6 +87,14 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (supported_builds.count(game_build_) == 0) {
     return false;
   }
+  xe::be<float>* currentFPS = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[game_build_].currentFPS_address);
+  xe::be<float>* frametime = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[game_build_].havok_frametime_address);
+  float correctFrametime = 1 / *currentFPS;
+
+  *frametime = correctFrametime * 2;
+
 
   auto now = std::chrono::steady_clock::now();
   auto elapsed_x = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -147,7 +161,6 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   xe::be<float>* radian_y = kernel_memory()->TranslateVirtual<xe::be<float>*>(
       supported_builds[game_build_].y_address);
 
-
   float degree_x = *addition_x;
   float degree_y = RadianstoDegree(*radian_y);
 
@@ -160,20 +173,58 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
 
   *addition_x = degree_x;
 
-    if (!cvars::invert_y) {
-      degree_y += (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
-    } else {
-      degree_y -= (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
-    }
 
-    *radian_y = DegreetoRadians(degree_y);
+  if (!cvars::invert_y) {
+    degree_y += (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
+  } else {
+    degree_y -= (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
+  }
+
+  *radian_y = DegreetoRadians(degree_y);
   return true;
 }
-std::string SaintsRow1Game::ChooseBinds() { return "Default"; }
+std::string SaintsRow1Game::ChooseBinds() {
+  auto* wheel_status = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].weapon_wheel_address);
+  auto* menu_status = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].menu_status_address);
+  auto* vehicle_status = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].vehicle_address);
+
+  if (*wheel_status == 1) {
+    return "Default";
+  }
+  if (menu_status && *menu_status != 2) {
+    return "Menu";
+  }
+  if (vehicle_status && *vehicle_status != 0) {
+    return "Vehicle";
+  }
+
+  return "Default";
+}
 bool SaintsRow1Game::ModifierKeyHandler(uint32_t user_index,
-                                       RawInputState& input_state,
-                                       X_INPUT_STATE* out_state) {
-  return false;
+                                        RawInputState& input_state,
+                                        X_INPUT_STATE* out_state) {
+  float thumb_lx = (int16_t)out_state->gamepad.thumb_lx;
+  float thumb_ly = (int16_t)out_state->gamepad.thumb_ly;
+
+  if (thumb_lx != 0 ||
+      thumb_ly !=
+          0) {  // Required otherwise stick is pushed to the right by default.
+    // Work out angle from the current stick values
+    float angle = atan2f(thumb_ly, thumb_lx);
+
+    // Sticks get set to SHRT_MAX if key pressed, use half of that
+    float distance = (float)SHRT_MAX;
+    distance /= 2;
+
+    out_state->gamepad.thumb_lx = (int16_t)(distance * cosf(angle));
+    out_state->gamepad.thumb_ly = (int16_t)(distance * sinf(angle));
+  }
+  // Return true to signal that we've handled the modifier, so default modifier
+  // won't be used
+  return true;
 }
 }  // namespace winkey
 }  // namespace hid
