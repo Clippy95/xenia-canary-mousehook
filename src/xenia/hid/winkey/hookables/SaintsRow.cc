@@ -44,8 +44,7 @@ struct GameBuildAddrs {
 };
 
 std::map<SaintsRowGame::GameBuild, GameBuildAddrs> supported_builds{
-    {SaintsRowGame::GameBuild::Unknown,
-     {"", NULL, NULL, NULL, NULL, NULL}},
+    {SaintsRowGame::GameBuild::Unknown, {"", NULL, NULL, NULL, NULL, NULL}},
     {SaintsRowGame::GameBuild::SaintsRow2_TU3,
      {"8.0.3", 0x82B7A570, 0x82B7A590, 0x82B7ABC4, 0x837B79C3, 0x82B58DA0}}};
 
