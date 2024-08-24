@@ -162,17 +162,17 @@ bool SaintsRowGame::DoHooks(uint32_t user_index, RawInputState& input_state,
 
   // X-axis = 0 to 360
   if (!cvars::invert_x) {
-    degree_x += (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
+    degree_x += (input_state.mouse.x_delta / 10.f) * (float)cvars::sensitivity;
   } else {
-    degree_x -= (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
+    degree_x -= (input_state.mouse.x_delta / 10.f) * (float)cvars::sensitivity;
   }
 
   *radian_x = DegreetoRadians(degree_x);
 
   if (!cvars::invert_y) {
-    degree_y += (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
+    degree_y += (input_state.mouse.y_delta / 10.f) * (float)cvars::sensitivity;
   } else {
-    degree_y -= (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
+    degree_y -= (input_state.mouse.y_delta / 10.f) * (float)cvars::sensitivity;
   }
 
   *radian_y = DegreetoRadians(degree_y);
