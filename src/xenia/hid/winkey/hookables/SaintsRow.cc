@@ -41,16 +41,13 @@ struct GameBuildAddrs {
   uint32_t player_status_address;
   uint32_t pressB_status_address;
   uint32_t menu_status_address;
-  uint32_t sniper_status_1_address;
-  uint32_t sniper_status_2_address;
 };
 
 std::map<SaintsRowGame::GameBuild, GameBuildAddrs> supported_builds{
     {SaintsRowGame::GameBuild::Unknown,
-     {"", NULL, NULL, NULL, NULL, NULL, NULL, NULL}},
+     {"", NULL, NULL, NULL, NULL, NULL}},
     {SaintsRowGame::GameBuild::SaintsRow2_TU3,
-     {"8.0.3", 0x82B7A570, 0x82B7A590, 0x82B7ABC4, 0x837B79C3, 0x82B58DA0,
-      0x82BCBA78, 0x82BCBA79}}};
+     {"8.0.3", 0x82B7A570, 0x82B7A590, 0x82B7ABC4, 0x837B79C3, 0x82B58DA0}}};
 
 SaintsRowGame::~SaintsRowGame() = default;
 
