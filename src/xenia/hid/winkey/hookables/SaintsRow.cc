@@ -221,16 +221,6 @@ std::string SaintsRowGame::ChooseBinds() {
     }
   }
 
-  // Check the sniper status last
-  auto* sniper_status_1 = kernel_memory()->TranslateVirtual<uint8_t*>(
-      supported_builds[game_build_].sniper_status_1_address);
-  auto* sniper_status_2 = kernel_memory()->TranslateVirtual<uint8_t*>(
-      supported_builds[game_build_].sniper_status_2_address);
-  if (sniper_status_1 && sniper_status_2 && *sniper_status_2 < 20 &&
-      *sniper_status_1 != 255) {
-    return "Sniper";
-  }
-
   return "Default";
 }
 
