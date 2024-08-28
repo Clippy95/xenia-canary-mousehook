@@ -7,8 +7,8 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_HID_WINKEY_GearsOfWars_H_
-#define XENIA_HID_WINKEY_GearsOfWars_H_
+#ifndef XENIA_HID_WINKEY_UnrealEngine3_H_
+#define XENIA_HID_WINKEY_UnrealEngine3_H_
 
 #include "xenia/hid/winkey/hookables/hookable_game.h"
 
@@ -25,7 +25,9 @@ class GearsOfWarsGame : public HookableGame {
     GearsOfWars3_TU0,
     GearsOfWars3_TU6,
     GearsOfWarsJudgment_TU0,
-    GearsOfWarsJudgment_TU4
+    GearsOfWarsJudgment_TU4,
+    ArmyOfTwo2_TU0,
+    ArmyOfTwo1_TU0
   };
 
   ~GearsOfWarsGame() override;
@@ -48,4 +50,4 @@ class GearsOfWarsGame : public HookableGame {
 }  // namespace hid
 }  // namespace xe
 
-#endif  // XENIA_HID_WINKEY_GearsOfWars_H_
+#endif  // XENIA_HID_WINKEY_UnrealEngine3_H_

@@ -19,7 +19,7 @@
 #include "xenia/ui/window.h"
 
 #include "xenia/hid/winkey/hookables/Crackdown2.h"
-#include "xenia/hid/winkey/hookables/GearsOfWars.h"
+#include "xenia/hid/winkey/hookables/UnrealEngine3.h"
 #include "xenia/hid/winkey/hookables/SaintsRow.h"
 #include "xenia/hid/winkey/hookables/SourceEngine.h"
 #include "xenia/hid/winkey/hookables/goldeneye.h"

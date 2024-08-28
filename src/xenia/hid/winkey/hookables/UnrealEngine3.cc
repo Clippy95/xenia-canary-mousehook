@@ -9,7 +9,7 @@
 
 #define _USE_MATH_DEFINES
 
-#include "xenia/hid/winkey/hookables/GearsOfWars.h"
+#include "xenia/hid/winkey/hookables/UnrealEngine3.h"
 
 #include "xenia/base/chrono.h"
 #include "xenia/base/platform_win.h"
@@ -32,6 +32,8 @@ const uint32_t kTitleIdGearsOfWars3 = 0x4D5308AB;
 const uint32_t kTitleIdGearsOfWars2 = 0x4D53082D;
 const uint32_t kTitleIdGearsOfWars1 = 0x4D5307D5;
 const uint32_t kTitleIdGearsOfWarsJudgment = 0x4D530A26;
+const uint32_t kTitleIdArmyOfTwo2 = 0x454108D8;
+const uint32_t kTitleIdArmyOfTwo1 = 0x454107F8;
 
 namespace xe {
 namespace hid {
@@ -57,7 +59,11 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
      {"9.0.4", 0x42943440, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU0,
-     {"1.0", 0x49EAC460, 0xDE, 0xDA, 0x83146F3F}}};
+     {"1.0", 0x49EAC460, 0xDE, 0xDA, 0x83146F3F}},
+    {GearsOfWarsGame::GameBuild::ArmyOfTwo2_TU0,
+     {"2.0", 0x7018F6AC, 0x1220, 0x121C, 0x83146F3F}},
+    {GearsOfWarsGame::GameBuild::ArmyOfTwo1_TU0,
+     {"1.0", 0x70187D74, 0xE24, 0xE20, 0x83146F3F}}};
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 
@@ -65,7 +71,9 @@ bool GearsOfWarsGame::IsGameSupported() {
   if (kernel_state()->title_id() != kTitleIdGearsOfWars3 &&
       kernel_state()->title_id() != kTitleIdGearsOfWars2 &&
       kernel_state()->title_id() != kTitleIdGearsOfWars1 &&
-      kernel_state()->title_id() != kTitleIdGearsOfWarsJudgment) {
+      kernel_state()->title_id() != kTitleIdGearsOfWarsJudgment &&
+      kernel_state()->title_id() != kTitleIdArmyOfTwo2 &&
+      kernel_state()->title_id() != kTitleIdArmyOfTwo1) {
     return false;
   }
 
@@ -100,8 +108,7 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (!current_thread) {
     return false;
   }
-  auto* menu_status = kernel_memory()->TranslateVirtual<uint8_t*>(
-      supported_builds[game_build_].menu_status_address);
+
   if (!bypass_conditions) {
     auto current_time = std::chrono::steady_clock::now();
     auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(
@@ -111,43 +118,72 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
       bypass_conditions = true;
     }
   }
-
+  static uint32_t stored_base_address = 0;
   // If the conditions are bypassed (after 2 minutes), run the code
   if (bypass_conditions) {
-    xe::be<uint16_t>* degree_x;
-    xe::be<uint16_t>* degree_y;
 
     uint32_t base_address =
         *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
             supported_builds[game_build_].camera_base_address);
-    if (base_address &&
+    if (base_address && base_address >= 0x40000000 &&
         base_address <
-            0x0000000050000000) {  // timer isn't enough, check location it's
-                                   // most likely between 40000000 - 50000000,
-                                   // thanks Marine.
-      degree_x = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          base_address + supported_builds[game_build_].x_offset);
+            0x50000000) {  // timer isn't enough, check location it's
+      // most likely between 40000000 - 50000000,
+      stored_base_address = base_address; // Shape shifting address workaround
+    }  // thanks Marine.
+    if (kernel_state()->title_id() == kTitleIdArmyOfTwo2 ||
+        kernel_state()->title_id() == kTitleIdArmyOfTwo1) {
+        xe::be<float>* degree_x =
+            kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                stored_base_address + supported_builds[game_build_].x_offset);
+        xe::be<float>* degree_y =
+            kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                stored_base_address + supported_builds[game_build_].y_offset);
 
-      degree_y = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          base_address + supported_builds[game_build_].y_offset);
+        float new_degree_x = *degree_x;
+        float new_degree_y = *degree_y;
 
-      uint16_t x_delta = static_cast<uint16_t>(
-          (input_state.mouse.x_delta * 10) * cvars::sensitivity);
-      uint16_t y_delta = static_cast<uint16_t>(
-          (input_state.mouse.y_delta * 10) * cvars::sensitivity);
-      if (!cvars::invert_x) {
-        *degree_x += x_delta;
+  if (!cvars::invert_x) {
+          new_degree_x +=
+              (input_state.mouse.x_delta * 12.5f) * (float)cvars::sensitivity;
+        } else {
+          new_degree_x -=
+              (input_state.mouse.x_delta * 12.5f) * (float)cvars::sensitivity;
+        }
+        *degree_x = new_degree_x;
+
+        if (!cvars::invert_y) {
+          new_degree_y -=
+              (input_state.mouse.y_delta * 12.5f) * (float)cvars::sensitivity;
+        } else {
+          new_degree_y +=
+              (input_state.mouse.y_delta * 12.5f) * (float)cvars::sensitivity;
+        }
+        *degree_y = new_degree_y;
+
       } else {
-        *degree_x -= x_delta;
-      }
+        xe::be<uint16_t>* degree_x =
+            kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
+                base_address + supported_builds[game_build_].x_offset);
+        xe::be<uint16_t>* degree_y =
+            kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
+                base_address + supported_builds[game_build_].y_offset);
 
-      if (!cvars::invert_y) {
-        *degree_y -= y_delta;
-      } else {
-        *degree_y += y_delta;
+        uint16_t x_delta = static_cast<uint16_t>(
+            (input_state.mouse.x_delta * 10) * cvars::sensitivity);
+        uint16_t y_delta = static_cast<uint16_t>(
+            (input_state.mouse.y_delta * 10) * cvars::sensitivity);
+
+        if (!cvars::invert_x) {
+          *degree_x -= x_delta;
+        } else {
+          *degree_x += x_delta;
+        }
+
+        *degree_y += y_delta;  // Adjust Y movement similarly
       }
     }
-  }
+  
   return true;
 }
 
