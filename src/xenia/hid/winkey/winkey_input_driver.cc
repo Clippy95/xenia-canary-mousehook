@@ -397,7 +397,7 @@ WinKeyInputDriver::WinKeyInputDriver(xe::ui::Window* window,
   hookable_games_.push_back(std::move(std::make_unique<SourceEngine>()));
   hookable_games_.push_back(std::move(std::make_unique<Crackdown2Game>()));
   hookable_games_.push_back(std::move(std::make_unique<SaintsRowGame>()));
-  hookable_games_.push_back(std::move(std::make_unique<GearsOfWarsGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<ArmyOfTwoGame>()));
 
   auto path = std::filesystem::current_path() / "bindings.ini";
 
