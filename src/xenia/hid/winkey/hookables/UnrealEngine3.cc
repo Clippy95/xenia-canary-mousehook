@@ -134,20 +134,20 @@ bool ArmyOfTwoGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     float new_degree_y = *degree_y;
 
     if (!cvars::invert_x) {
-      new_degree_x +=
-          (input_state.mouse.x_delta * 2.f) * (float)cvars::sensitivity;
+      new_degree_x += (input_state.mouse.x_delta * 25.1327412287f) *
+                      (float)cvars::sensitivity;
     } else {
-      new_degree_x -=
-          (input_state.mouse.x_delta * 2.f) * (float)cvars::sensitivity;
+      new_degree_x -= (input_state.mouse.x_delta * 25.1327412287f) *
+                      (float)cvars::sensitivity;
     }
     *degree_x = new_degree_x;
 
     if (!cvars::invert_y) {
-      new_degree_y -=
-          (input_state.mouse.y_delta * 2.f) * (float)cvars::sensitivity;
+      new_degree_y -= (input_state.mouse.y_delta * 25.1327412287f) *
+                      (float)cvars::sensitivity;
     } else {
-      new_degree_y +=
-          (input_state.mouse.y_delta * 2.f) * (float)cvars::sensitivity;
+      new_degree_y += (input_state.mouse.y_delta * 25.1327412287f) *
+                      (float)cvars::sensitivity;
     }
     *degree_y = new_degree_y;
   }
