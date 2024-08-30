@@ -39,33 +39,34 @@ namespace winkey {
 struct GameBuildAddrs {
   const char* title_version;
   uint32_t camera_base_address;
+  std::vector<uint32_t> base_offsets;  // List of offsets
   uint32_t x_offset;
   uint32_t y_offset;
   uint32_t menu_status_address;
 };
 
 std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
-    {GearsOfWarsGame::GameBuild::Unknown, {"", NULL, NULL, NULL}},
+    {GearsOfWarsGame::GameBuild::Unknown, {"", NULL, {}, NULL, NULL}},
     {GearsOfWarsGame::GameBuild::GearsOfWars2_TU6,
-     {"5.0.6", 0x40874800, 0x66, 0x62, 0x83146F3F}},
+     {"5.0.6", 0x40874800, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars2_TU0,
-     {"6.0", 0x408211C0, 0x66, 0x62, 0x83146F3F}},
+     {"6.0", 0x4301E1B0, {0x40}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0,
-     {"11.0", 0x43F6F340, 0x66, 0x62, 0x83146F3F}},
+     {"11.0", 0x43F6F340, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6,
-     {"9.0.6", 0x42145D40, 0x66, 0x62, 0x83146F3F}},
+     {"9.0.6", 0x42145D40, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0_XBL,
-     {"9.0", 0x43F6F340, 0x66, 0x62, 0x83146F3F}},
+     {"9.0", 0x43F6F340, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6_XBL,
-     {"11.0.6", 0x42145D40, 0x66, 0x62, 0x83146F3F}},
+     {"11.0.6", 0x42145D40, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
-     {"9.0", 0x448F2840, 0x66, 0x62, 0x83146F3F}},
+     {"9.0", 0x448F2840, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU4,
-     {"9.0.4", 0x42943440, 0x66, 0x62, 0x83146F3F}},
+     {"9.0.4", 0x42943440, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU0,
-     {"1.0", 0x49EAC460, 0xDE, 0xDA, 0x83146F3F}},
+     {"1.0", 0x49EAC460, {}, 0xDE, 0xDA, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars1_TU5,
-     {"1.0.5", 0x4A1CBA60, 0xDE, 0xDA, 0x83146F3F}}};
+     {"1.0.5", 0x4A1CBA60, {}, 0xDE, 0xDA, 0x83146F3F}}};
 
 GearsOfWarsGame::~GearsOfWarsGame() = default;
 
@@ -115,7 +116,7 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(
         current_time - start_time);
 
-    if (elapsed_time.count() >= 15) {
+    if (elapsed_time.count() >= 40) {
       bypass_conditions = true;
     }
   }
@@ -125,19 +126,25 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     xe::be<uint16_t>* degree_x;
     xe::be<uint16_t>* degree_y;
 
-    uint32_t base_address =
+    uint32_t camera_base =
         *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
             supported_builds[game_build_].camera_base_address);
-    if (base_address &&
-        base_address <
+
+    for (const auto& offset : supported_builds[game_build_].base_offsets) {
+      camera_base = *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+          camera_base + offset);
+    }
+
+    if (camera_base &&
+        camera_base <
             0x0000000050000000) {  // timer isn't enough, check location it's
                                    // most likely between 40000000 - 50000000,
                                    // thanks Marine.
       degree_x = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          base_address + supported_builds[game_build_].x_offset);
+          camera_base + supported_builds[game_build_].x_offset);
 
       degree_y = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          base_address + supported_builds[game_build_].y_offset);
+          camera_base + supported_builds[game_build_].y_offset);
 
       uint16_t x_delta = static_cast<uint16_t>(
           (input_state.mouse.x_delta * 10) * cvars::sensitivity);
