@@ -54,7 +54,7 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0,
      {"11.0", 0x43F6F340, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6,
-     {"9.0.6", 0x42145D40, {}, 0x66, 0x62, 0x83146F3F}},
+     {"9.0.6", 0x7018F564, {0x3D8}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0_XBL,
      {"9.0", 0x43F6F340, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6_XBL,
@@ -131,20 +131,25 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
             supported_builds[game_build_].camera_base_address);
 
     for (const auto& offset : supported_builds[game_build_].base_offsets) {
+      if (!(camera_base && camera_base >= 0x40000000 &&
+            camera_base < 0x80000000)) {
+        break;
+      }
       camera_base = *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
           camera_base + offset);
     }
+    static uint32_t stored_base_address = 0;
+    if (camera_base && camera_base >= 0x40000000 && camera_base < 0x80000000) {
 
-    if (camera_base &&
-        camera_base <
-            0x0000000050000000) {  // timer isn't enough, check location it's
+        stored_base_address = camera_base;
+    }  // timer isn't enough, check location it's
                                    // most likely between 40000000 - 50000000,
                                    // thanks Marine.
       degree_x = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          camera_base + supported_builds[game_build_].x_offset);
+        stored_base_address + supported_builds[game_build_].x_offset);
 
       degree_y = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-          camera_base + supported_builds[game_build_].y_offset);
+          stored_base_address + supported_builds[game_build_].y_offset);
 
       uint16_t x_delta = static_cast<uint16_t>(
           (input_state.mouse.x_delta * 10) * cvars::sensitivity);
@@ -162,7 +167,7 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
         *degree_y += y_delta;
       }
     }
-  }
+  
   return true;
 }
 
