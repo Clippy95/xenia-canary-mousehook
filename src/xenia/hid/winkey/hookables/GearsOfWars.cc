@@ -56,7 +56,7 @@ std::map<GearsOfWarsGame::GameBuild, GameBuildAddrs> supported_builds{
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6,
      {"9.0.6", 0x7018F564, {0x3D8}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU0_XBL,
-     {"9.0", 0x43F6F340, {}, 0x66, 0x62, 0x83146F3F}},
+     {"9.0", 0x7018F564, {0x3D8}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWars3_TU6_XBL,
      {"11.0.6", 0x42145D40, {}, 0x66, 0x62, 0x83146F3F}},
     {GearsOfWarsGame::GameBuild::GearsOfWarsJudgment_TU0,
@@ -133,24 +133,31 @@ bool GearsOfWarsGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     for (const auto& offset : supported_builds[game_build_].base_offsets) {
       if (!(camera_base && camera_base >= 0x40000000 &&
             camera_base < 0x80000000)) {
+        printf("WRONGG: 0x%08X. \n", camera_base);
         break;
       }
+      printf("Current base before offset: 0x%08X\n", camera_base);
+      printf("le offset: 0x%08X\n", offset);
       camera_base = *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
           camera_base + offset);
     }
+    printf("Final Camera Base Address: 0x%08X\n", camera_base);
     static uint32_t stored_base_address = 0;
     if (camera_base && camera_base >= 0x40000000 && camera_base < 0x80000000) {
 
         stored_base_address = camera_base;
+        printf("muh stored: 0x%08X\n", stored_base_address);
     }  // timer isn't enough, check location it's
                                    // most likely between 40000000 - 50000000,
                                    // thanks Marine.
       degree_x = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
         stored_base_address + supported_builds[game_build_].x_offset);
-
+      printf("DEGREE_X ADDRESS: 0x%08X\n",
+             (stored_base_address + supported_builds[game_build_].x_offset));
       degree_y = kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
           stored_base_address + supported_builds[game_build_].y_offset);
-
+      printf("DEGREE_X ADDRESS: 0x%08X\n",
+             (stored_base_address + supported_builds[game_build_].y_offset));
       uint16_t x_delta = static_cast<uint16_t>(
           (input_state.mouse.x_delta * 10) * cvars::sensitivity);
       uint16_t y_delta = static_cast<uint16_t>(
