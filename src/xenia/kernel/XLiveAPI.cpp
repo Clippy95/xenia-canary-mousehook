@@ -210,6 +210,10 @@ void XLiveAPI::Init() {
     // Assign online ip as local ip to ensure XNADDR is not 0 for systemlink
     online_ip_ = local_ip_;
 
+    // Fixes 4D53085F from crashing when joining via systemlink.
+    kernel_state()->BroadcastNotification(0x02000001,
+                                          X_ONLINE_S_LOGON_DISCONNECTED);
+
     XELOGE("XLiveAPI:: Cannot reach API server.");
     initialized_ = InitState::Failed;
     return;
@@ -448,7 +452,11 @@ sockaddr_in XLiveAPI::Getwhoami() {
 
   XELOGI("Requesting Public IP");
 
-  addr = ip_to_sockaddr(doc["address"].GetString());
+  const char* address_str = doc["address"].GetString();
+
+  if (address_str) {
+    addr = ip_to_sockaddr(address_str);
+  }
 
   return addr;
 }
@@ -633,7 +641,7 @@ void XLiveAPI::SessionModify(uint64_t sessionId, XSessionModify* data) {
 }
 
 const std::vector<std::unique_ptr<SessionObjectJSON>> XLiveAPI::SessionSearch(
-    XSessionSearch* data) {
+    XSessionSearch* data, uint32_t num_users) {
   std::string endpoint =
       fmt::format("title/{:08X}/sessions/search", kernel_state()->title_id());
 
@@ -642,6 +650,7 @@ const std::vector<std::unique_ptr<SessionObjectJSON>> XLiveAPI::SessionSearch(
 
   doc.AddMember("searchIndex", data->proc_index, doc.GetAllocator());
   doc.AddMember("resultsCount", data->num_results, doc.GetAllocator());
+  doc.AddMember("numUsers", num_users, doc.GetAllocator());
 
   rapidjson::StringBuffer buffer;
   PrettyWriter<rapidjson::StringBuffer> writer(buffer);

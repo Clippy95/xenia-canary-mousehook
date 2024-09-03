@@ -100,7 +100,7 @@ class XLiveAPI {
   static void SessionModify(uint64_t sessionId, XSessionModify* data);
 
   static const std::vector<std::unique_ptr<SessionObjectJSON>> SessionSearch(
-      XSessionSearch* data);
+      XSessionSearch* data, uint32_t num_users);
 
   static void SessionContextSet(uint64_t session_id,
                                 std::map<uint32_t, uint32_t> contexts);
@@ -181,6 +181,8 @@ class XLiveAPI {
   inline static std::map<uint32_t, uint64_t> sessionIdCache{};
   inline static std::map<uint32_t, uint64_t> macAddressCache{};
   inline static std::map<uint64_t, std::vector<uint8_t>> qos_payload_cache{};
+
+  inline static xe::be<uint64_t> systemlink_id = 0;
 
   inline static int8_t version_status;
 

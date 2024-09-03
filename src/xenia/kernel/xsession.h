@@ -146,18 +146,15 @@ struct XSessionModify {
   xe::be<uint32_t> flags;
   xe::be<uint32_t> maxPublicSlots;
   xe::be<uint32_t> maxPrivateSlots;
-  xe::be<uint32_t> xoverlapped;
 };
 
 struct XSessionStart {
   xe::be<uint32_t> obj_ptr;
   xe::be<uint32_t> flags;
-  xe::be<uint32_t> xoverlapped;
 };
 
 struct XSessionEnd {
   xe::be<uint32_t> obj_ptr;
-  xe::be<uint32_t> xoverlapped;
 };
 
 struct XSessionSearch {
@@ -170,29 +167,30 @@ struct XSessionSearch {
   xe::be<uint32_t> ctx_ptr;
   xe::be<uint32_t> results_buffer_size;
   xe::be<uint32_t> search_results_ptr;
-  xe::be<uint32_t> xoverlapped_ptr;
 };
 
-struct XSessionSearchID {
+struct XSessionSearchEx {
+  XSessionSearch session_search;
+  xe::be<uint32_t> num_users;
+};
+
+struct XSessionSearchByID {
   xe::be<uint32_t> user_index;
   XNKID session_id;
   xe::be<uint32_t> results_buffer_size;
   xe::be<uint32_t> search_results_ptr;
-  xe::be<uint32_t> xoverlapped_ptr;
 };
 
 struct XSessionDetails {
   xe::be<uint32_t> obj_ptr;
   xe::be<uint32_t> details_buffer_size;
   xe::be<uint32_t> session_details_ptr;
-  xe::be<uint32_t> pXOverlapped;
 };
 
 struct XSessionMigate {
   xe::be<uint32_t> obj_ptr;
   xe::be<uint32_t> session_info_ptr;
   xe::be<uint32_t> user_index;
-  xe::be<uint32_t> pXOverlapped;
 };
 
 struct XSessionArbitrationData {
@@ -202,7 +200,6 @@ struct XSessionArbitrationData {
   xe::be<uint32_t> value_const;  // 300
   xe::be<uint32_t> results_buffer_size;
   xe::be<uint32_t> results_ptr;
-  xe::be<uint32_t> xoverlapped_ptr;
 };
 
 struct XSessionData {
@@ -221,20 +218,18 @@ struct XSessionWriteStats {
   xe::be<uint64_t> xuid;
   xe::be<uint32_t> number_of_leaderboards;
   xe::be<uint32_t> leaderboards_ptr;
-  xe::be<uint32_t> xoverlapped;
 };
 
 struct XSessionModifySkill {
   xe::be<uint32_t> obj_ptr;
   xe::be<uint32_t> array_count;
   xe::be<uint32_t> xuid_array_ptr;
-  xe::be<uint32_t> xoverlapped;
 };
 
 struct XSessionViewProperties {
   xe::be<uint32_t> leaderboard_id;
   xe::be<uint32_t> properties_count;
-  xe::be<uint32_t> properties_guest_address;
+  xe::be<uint32_t> properties_ptr;
 };
 
 struct XSessionJoin {
@@ -315,15 +310,28 @@ class XSession : public XObject {
   X_RESULT StartSession(uint32_t flags);
   X_RESULT EndSession();
 
-  static X_RESULT GetSessions(Memory* memory, XSessionSearch* search_data);
-  static X_RESULT GetSessionByID(Memory* memory, XSessionSearchID* search_data);
-
-  static void GenerateIdentityExchangeKey(XNKEY* key);
+  static X_RESULT GetSessions(Memory* memory, XSessionSearch* search_data,
+                              uint32_t num_users);
+  static X_RESULT GetSessionByID(Memory* memory,
+                                 XSessionSearchByID* search_data);
 
   static constexpr uint8_t XNKID_ONLINE = 0xAE;
   static constexpr uint8_t XNKID_SYSTEM_LINK = 0x00;
 
   // static constexpr uint32_t ERROR_SESSION_WRONG_STATE = 0x80155206;
+
+  static void GenerateIdentityExchangeKey(XNKEY* key) {
+    for (uint8_t i = 0; i < sizeof(XNKEY); i++) {
+      key->ab[i] = i;
+    }
+  }
+
+  static const uint64_t GenerateSessionId(uint8_t mask) {
+    std::random_device rd;
+    std::uniform_int_distribution<uint64_t> dist(0, -1);
+
+    return ((uint64_t)mask << 56) | (dist(rd) & 0x0000FFFFFFFFFFFF);
+  }
 
   static const bool IsOnlinePeer(uint64_t session_id) {
     return ((session_id >> 56) & 0xFF) == XNKID_ONLINE;
@@ -331,6 +339,28 @@ class XSession : public XObject {
 
   static const bool IsSystemlink(uint64_t session_id) {
     return ((session_id >> 56) & 0xFF) == XNKID_SYSTEM_LINK;
+  }
+
+  const bool IsXboxLive() { return !is_systemlink_; }
+
+  const bool IsSystemlink() { return is_systemlink_; }
+
+  static const bool IsValidXNKID(uint64_t session_id) {
+    if (!XSession::IsOnlinePeer(session_id) &&
+            !XSession::IsSystemlink(session_id) ||
+        session_id == 0) {
+      assert_always();
+
+      return false;
+    }
+
+    return true;
+  }
+
+  static const bool IsSystemlinkFlags(uint8_t flags) {
+    const uint32_t systemlink = HOST | STATS | PEER_NETWORK;
+
+    return (flags & ~systemlink) == 0;
   }
 
   const bool IsMemberLocallySignedIn(uint64_t xuid, uint32_t user_index) const {
@@ -375,23 +405,22 @@ class XSession : public XObject {
   }
 
   const bool IsCreated() const {
-    return (state & STATE_FLAGS_CREATED) == STATE_FLAGS_CREATED;
+    return (state_ & STATE_FLAGS_CREATED) == STATE_FLAGS_CREATED;
   }
 
   const bool IsHost() const {
-    return (state & STATE_FLAGS_HOST) == STATE_FLAGS_HOST;
+    return (state_ & STATE_FLAGS_HOST) == STATE_FLAGS_HOST;
   }
 
   const bool IsMigrted() const {
-    return (state & STATE_FLAGS_MIGRATED) == STATE_FLAGS_MIGRATED;
+    return (state_ & STATE_FLAGS_MIGRATED) == STATE_FLAGS_MIGRATED;
   }
 
   const bool IsDeleted() const {
-    return (state & STATE_FLAGS_DELETED) == STATE_FLAGS_DELETED;
+    return (state_ & STATE_FLAGS_DELETED) == STATE_FLAGS_DELETED;
   }
 
  private:
-  uint64_t GenerateSessionId(uint8_t mask);
   void PrintSessionDetails();
   void PrintSessionType(SessionFlags flags);
 
@@ -424,8 +453,10 @@ class XSession : public XObject {
                                     XSESSION_SEARCHRESULT* result);
 
   // uint64_t migrated_session_id_;
-  uint64_t session_id_;
-  uint32_t state = 0;
+  uint64_t session_id_ = 0;
+  uint32_t state_ = 0;
+
+  bool is_systemlink_ = false;
 
   XSESSION_LOCAL_DETAILS local_details_{};
 

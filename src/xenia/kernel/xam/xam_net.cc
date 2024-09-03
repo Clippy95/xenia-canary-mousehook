@@ -315,10 +315,10 @@ dword_result_t NetDll_XnpLogonGetStatus_entry(
 }
 DECLARE_XAM_EXPORT1(NetDll_XnpLogonGetStatus, kNetworking, kStub);
 
-dword_result_t NetDll_XNetGetOpt_entry(dword_t one, dword_t option_id,
+dword_result_t NetDll_XNetGetOpt_entry(dword_t caller, dword_t option_id,
                                        lpvoid_t buffer_ptr,
                                        lpdword_t buffer_size) {
-  assert_true(one == 1);
+  assert_true(caller == 1);
   switch (option_id) {
     case 1:
       if (*buffer_size < sizeof(XNetStartupParams)) {
@@ -473,7 +473,7 @@ dword_result_t NetDll_WSAGetOverlappedResult_entry(
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
   if (!socket) {
     XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
-    return 0;
+    return -1;
   }
 
   bool ret = socket->WSAGetOverlappedResult(overlapped_ptr, bytes_transferred,
@@ -494,6 +494,10 @@ dword_result_t NetDll_WSASendTo_entry(
     pointer_t<XWSAOVERLAPPED> overlapped, lpvoid_t completion_routine) {
   assert(!overlapped);
   assert(!completion_routine);
+
+  if (overlapped) {
+    XELOGW("NetDll_WSASendTo: overlapped!");
+  }
 
   auto socket =
       kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
@@ -522,9 +526,7 @@ dword_result_t NetDll_WSASendTo_entry(
       combined_buffer_mem.data(), combined_buffer_size, flags, to_ptr, to_len);
 
   if (result == -1) {
-    const uint32_t error_code = socket->GetLastWSAError();
-    XThread::SetLastError(error_code);
-    XELOGE("NetDll_WSASendTo failed: {:08X}", error_code);
+    XThread::SetLastError(socket->GetLastWSAError());
     return result;
   } else if (result != -1 && to_ptr && !cvars::log_mask_ips) {
     XELOGI("NetDll_WSASendTo: Send {} bytes to: {}.{}.{}.{}", result,
@@ -777,7 +779,7 @@ dword_result_t NetDll_XNetXnAddrToInAddr_entry(dword_t caller,
   if (memcmp(XLiveAPI::mac_address_, xn_addr->abEnet, sizeof(MacAddress)) ==
       0) {
     XELOGI("Resolving XNetXnAddrToInAddr to LOOPBACK!");
-    in_addr->S_un.S_addr = LOOPBACK;
+    in_addr->S_un.S_addr = xe::byte_swap(LOOPBACK);
 
     return X_ERROR_SUCCESS;
   }
@@ -822,15 +824,34 @@ dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
       XLiveAPI::macAddressCache.end()) {
     const auto player = XLiveAPI::FindPlayer(ip_to_string(xn_addr->inaOnline));
 
-    XLiveAPI::sessionIdCache.emplace(xn_addr->inaOnline.s_addr,
-                                     player->SessionID());
+    // FIXME
+    if (!XLiveAPI::systemlink_id) {
+      XSession::IsValidXNKID(player->SessionID());
 
-    XLiveAPI::macAddressCache.emplace(xn_addr->inaOnline.s_addr,
-                                      player->MacAddress());
+      XLiveAPI::sessionIdCache.emplace(xn_addr->inaOnline.s_addr,
+                                       player->SessionID());
+
+      XLiveAPI::macAddressCache.emplace(xn_addr->inaOnline.s_addr,
+                                        player->MacAddress());
+    } else {
+      // Remote mac missing for systemlink!
+      // 415607E1 (CoD 3) checks for this!
+      //
+      // If we're connected to server then use it
+      if (player->MacAddress()) {
+        XLiveAPI::macAddressCache.emplace(xn_addr->inaOnline.s_addr,
+                                          player->MacAddress());
+      }
+    }
   }
 
-  MacAddress mac =
-      MacAddress(XLiveAPI::macAddressCache[xn_addr->inaOnline.s_addr]);
+  const uint64_t remote_mac =
+      XLiveAPI::macAddressCache[xn_addr->inaOnline.s_addr];
+  MacAddress mac = MacAddress(static_cast<uint64_t>(0));
+
+  if (remote_mac) {
+    mac = MacAddress(XLiveAPI::macAddressCache[xn_addr->inaOnline.s_addr]);
+  }
 
   std::memcpy(xn_addr->abEnet, mac.raw(), sizeof(MacAddress));
   std::memcpy(xn_addr->abOnline, mac.raw(), sizeof(MacAddress));
@@ -839,8 +860,15 @@ dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
     uint64_t* sessionId_ptr =
         kernel_memory()->TranslateVirtual<uint64_t*>(xid_ptr);
 
-    *sessionId_ptr =
-        xe::byte_swap(XLiveAPI::sessionIdCache[xn_addr->inaOnline.s_addr]);
+    // FIXME
+    if (XLiveAPI::systemlink_id) {
+      *sessionId_ptr = XLiveAPI::systemlink_id;
+    } else {
+      *sessionId_ptr =
+          xe::byte_swap(XLiveAPI::sessionIdCache[xn_addr->inaOnline.s_addr]);
+    }
+
+    XSession::IsValidXNKID(xe::byte_swap(*sessionId_ptr));
   }
 
   return X_STATUS_SUCCESS;
@@ -1028,6 +1056,8 @@ dword_result_t NetDll_XNetQosListen_entry(
   }
 
   const uint64_t session_id = xe::byte_swap(sessionId->as_uint64());
+
+  XSession::IsValidXNKID(session_id);
 
   if (flags & LISTEN_SET_DATA) {
     std::vector<uint8_t> qos_buffer(data_size);
@@ -1229,11 +1259,11 @@ dword_result_t NetDll_XNetQosLookup_entry(
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetQosLookup, kNetworking, kImplemented);
 
-dword_result_t NetDll_XNetQosGetListenStats_entry(dword_t caller, dword_t unk,
+dword_result_t NetDll_XNetQosGetListenStats_entry(dword_t caller,
                                                   dword_t pxnkid,
                                                   lpdword_t pQosListenStats) {
-  XELOGI("XNetQosGetListenStats({:08X}, {:08X}, {:08X}, {:08X})", caller, unk,
-         caller, unk, pxnkid, pQosListenStats.guest_address());
+  XELOGI("XNetQosGetListenStats({:08X}, {:08X}, {:08X})", caller, pxnkid,
+         pQosListenStats.guest_address());
 
   if (pQosListenStats) {
     auto qos = kernel_memory()->TranslateVirtual<XNQOSLISTENSTATS*>(
@@ -1258,7 +1288,7 @@ DECLARE_XAM_EXPORT1(XampXAuthStartup, kNetworking, kStub);
 
 dword_result_t NetDll_XHttpStartup_entry(dword_t caller, dword_t reserved,
                                          dword_t reserved_ptr) {
-  return TRUE;
+  return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XHttpStartup, kNetworking, kStub);
 
@@ -1294,7 +1324,7 @@ dword_result_t NetDll_XHttpSendRequest_entry(dword_t caller, dword_t hrequest,
                                              dword_t unkn2, dword_t unk3,
                                              dword_t unk4) {
   XELOGI("Headers {}", headers ? headers : "");
-  return FALSE;
+  return false;
 }
 DECLARE_XAM_EXPORT1(NetDll_XHttpSendRequest, kNetworking, kStub);
 
@@ -1315,7 +1345,7 @@ dword_result_t NetDll_inet_addr_entry(lpstring_t addr_ptr) {
 }
 DECLARE_XAM_EXPORT1(NetDll_inet_addr, kNetworking, kImplemented);
 
-BOOL optEnable = TRUE;
+bool optEnable = true;
 dword_result_t NetDll_socket_entry(dword_t caller, dword_t af, dword_t type,
                                    dword_t protocol) {
   XSocket* socket = new XSocket(kernel_state());
@@ -1692,7 +1722,7 @@ dword_result_t NetDll_recvfrom_entry(dword_t caller, dword_t socket_handle,
 
   uint32_t native_fromlen = fromlen_ptr ? fromlen_ptr.value() : 0;
   int ret = socket->RecvFrom(buf_ptr, buf_len, flags, from_ptr,
-                             fromlen_ptr ? &native_fromlen : 0);
+                             fromlen_ptr ? &native_fromlen : nullptr);
   if (fromlen_ptr) {
     *fromlen_ptr = native_fromlen;
   }
@@ -1755,6 +1785,34 @@ dword_result_t NetDll_sendto_entry(dword_t caller, dword_t socket_handle,
   return ret;
 }
 DECLARE_XAM_EXPORT1(NetDll_sendto, kNetworking, kImplemented);
+
+dword_result_t NetDll_WSAEventSelect_entry(dword_t caller,
+                                           dword_t socket_handle,
+                                           dword_t event_handle,
+                                           dword_t flags) {
+  auto socket =
+      kernel_state()->object_table()->LookupObject<XSocket>(socket_handle);
+  if (!socket) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    return -1;
+  }
+
+  auto ev = kernel_state()->object_table()->LookupObject<XEvent>(event_handle);
+  if (!ev) {
+    XThread::SetLastError(uint32_t(X_WSAError::X_WSAENOTSOCK));
+    return -1;
+  }
+
+  int ret = socket->WSAEventSelect(socket->native_handle(), ev->native_handle(),
+                                   flags);
+
+  if (ret < 0) {
+    XThread::SetLastError(socket->GetLastWSAError());
+  }
+
+  return ret;
+}
+DECLARE_XAM_EXPORT1(NetDll_WSAEventSelect, kNetworking, kImplemented);
 
 dword_result_t NetDll___WSAFDIsSet_entry(dword_t socket_handle,
                                          pointer_t<x_fd_set> fd_set) {
@@ -1828,10 +1886,15 @@ dword_result_t NetDll_getsockname_entry(dword_t caller, dword_t socket_handle,
 }
 DECLARE_XAM_EXPORT1(NetDll_getsockname, kNetworking, kImplemented);
 
-dword_result_t NetDll_XNetCreateKey_entry(dword_t caller, lpdword_t key_id,
-                                          lpdword_t exchange_key) {
-  kernel_memory()->Fill(key_id.guest_address(), 8, 0xBE);
-  kernel_memory()->Fill(exchange_key.guest_address(), 16, 0xBE);
+dword_result_t NetDll_XNetCreateKey_entry(dword_t caller,
+                                          pointer_t<XNKID> session_key,
+                                          pointer_t<XNKEY> exchange_key) {
+  const xe::be<uint64_t> xnkid =
+      XSession::GenerateSessionId(XSession::XNKID_SYSTEM_LINK);
+  memcpy(session_key->ab, &xnkid, sizeof(XNKID));
+
+  XSession::GenerateIdentityExchangeKey(exchange_key);
+
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetCreateKey, kNetworking, kStub);
@@ -1839,12 +1902,16 @@ DECLARE_XAM_EXPORT1(NetDll_XNetCreateKey, kNetworking, kStub);
 dword_result_t NetDll_XNetRegisterKey_entry(dword_t caller,
                                             pointer_t<XNKID> session_key,
                                             pointer_t<XNKEY> exchange_key) {
+  // Very hacky needs fixing!
+  XLiveAPI::systemlink_id = session_key->as_uint64();
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetRegisterKey, kNetworking, kStub);
 
 dword_result_t NetDll_XNetUnregisterKey_entry(dword_t caller,
                                               pointer_t<XNKID> session_key) {
+  XLiveAPI::systemlink_id = 0;
+
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetUnregisterKey, kNetworking, kStub);

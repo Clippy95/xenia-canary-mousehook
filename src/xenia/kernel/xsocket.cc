@@ -110,31 +110,16 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     return X_STATUS_SUCCESS;
   }
 
-  // Because values provided in optval_ptr are in BE we must to somehow save
-  // them in LE.
-  void* optval_ptr_le = calloc(1, optlen);
-  switch (optlen) {
-    case 1:
-      xe::copy_and_swap<uint8_t>((uint8_t*)optval_ptr_le, (uint8_t*)optval_ptr,
-                                 1);
-      break;
-    case 4:
-      xe::copy_and_swap<uint32_t>((uint32_t*)optval_ptr_le,
-                                  (uint32_t*)optval_ptr, 1);
-      break;
-    case 8:
-      xe::copy_and_swap<uint64_t>((uint64_t*)optval_ptr_le,
-                                  (uint64_t*)optval_ptr, 1);
-      break;
-    default:
-      XELOGE("XSocket::SetOption - Unhandled optlen: {}", optlen);
-      break;
+  void* proper_ptr =
+      GetOptValueWithProperEndianness(optval_ptr, optname, optlen);
+
+  int ret = setsockopt(native_handle_, level, optname, (const char*)proper_ptr,
+                       optlen);
+
+  // Cheezy way to check if we created some additional allocation.
+  if (optval_ptr != proper_ptr) {
+    free(proper_ptr);
   }
-
-  int ret = setsockopt(native_handle_, level, optname,
-                       (const char*)optval_ptr_le, optlen);
-
-  free(optval_ptr_le);
 
   if (ret < 0) {
     // TODO: WSAGetLastError()
@@ -242,12 +227,18 @@ int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
 
 int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
                       XSOCKADDR_IN* from, uint32_t* from_len) {
-  sockaddr sa = from->to_host();
+  sockaddr sa{};
+
+  if (from) {
+    sa = from->to_host();
+  }
 
   int ret = recvfrom(native_handle_, reinterpret_cast<char*>(buf), buf_len,
                      flags, from ? &sa : nullptr, (int*)from_len);
 
-  from->to_guest(&sa);
+  if (from) {
+    from->to_guest(&sa);
+  }
 
   return ret;
 }
@@ -504,6 +495,12 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
 
   return sendto(native_handle_, reinterpret_cast<char*>(buf), buf_len, flags,
                 to ? &to->to_host() : nullptr, to_len);
+}
+
+int XSocket::WSAEventSelect(uint64_t socket_handle, uint64_t event_handle,
+                            uint32_t flags) {
+  return ::WSAEventSelect(socket_handle, reinterpret_cast<HANDLE>(event_handle),
+                          flags);
 }
 
 bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,

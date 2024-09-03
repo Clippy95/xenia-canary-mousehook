@@ -72,7 +72,7 @@ X_RESULT XSession::CreateSession(uint8_t user_index, uint8_t public_slots,
   uint64_t* Nonce_ptr =
       kernel_state_->memory()->TranslateVirtual<uint64_t*>(nonce_ptr);
 
-  local_details_.UserIndexHost = XUSER_INDEX_NONE;
+  local_details_.UserIndexHost = X_USER_INDEX_NONE;
 
   // CSGO only uses STATS flag to create a session to POST stats pre round.
   // Minecraft and Portal 2 use flags HOST + STATS.
@@ -91,6 +91,10 @@ X_RESULT XSession::CreateSession(uint8_t user_index, uint8_t public_slots,
   // Write user contexts. After session creation these are read only!
   contexts_.insert(user_profile->contexts_.cbegin(),
                    user_profile->contexts_.cend());
+
+  if (IsSystemlinkFlags(flags)) {
+    is_systemlink_ = true;
+  }
 
   if (flags == STATS) {
     CreateStatsSession(SessionInfo_ptr, Nonce_ptr, user_index, public_slots,
@@ -118,28 +122,16 @@ X_RESULT XSession::CreateSession(uint8_t user_index, uint8_t public_slots,
   local_details_.xnkidArbitration = XNKID{};
   local_details_.SessionMembers_ptr = 0;
 
-  state |= STATE_FLAGS_CREATED;
+  state_ |= STATE_FLAGS_CREATED;
 
   return X_ERROR_SUCCESS;
-}
-
-void XSession::GenerateIdentityExchangeKey(XNKEY* key) {
-  for (uint8_t i = 0; i < sizeof(XNKEY); i++) {
-    key->ab[i] = i;
-  }
-}
-
-uint64_t XSession::GenerateSessionId(uint8_t mask) {
-  std::random_device rd;
-  std::uniform_int_distribution<uint64_t> dist(0, -1);
-  return ((uint64_t)mask << 56) | (dist(rd) & 0x0000FFFFFFFFFFFF);
 }
 
 X_RESULT XSession::CreateHostSession(XSESSION_INFO* session_info,
                                      uint64_t* nonce_ptr, uint8_t user_index,
                                      uint8_t public_slots,
                                      uint8_t private_slots, uint32_t flags) {
-  state |= STATE_FLAGS_HOST;
+  state_ |= STATE_FLAGS_HOST;
 
   local_details_.UserIndexHost = user_index;
 
@@ -156,15 +148,32 @@ X_RESULT XSession::CreateHostSession(XSESSION_INFO* session_info,
   session_data->num_slots_public = public_slots;
   session_data->num_slots_private = private_slots;
   session_data->flags = flags;
-  session_id_ = GenerateSessionId(XNKID_ONLINE);
-  Uint64toXNKID(session_id_, &session_info->sessionID);
 
-  XLiveAPI::XSessionCreate(session_id_, session_data);
+  const uint64_t systemlink_id = xe::byte_swap(XLiveAPI::systemlink_id);
+
+  if (IsSystemlink()) {
+    XELOGI("Creating systemlink session");
+
+    // If XNetRegisterKey did not register key then we must register it here
+    if (systemlink_id) {
+      session_id_ = systemlink_id;
+    } else {
+      session_id_ = GenerateSessionId(XNKID_SYSTEM_LINK);
+      XLiveAPI::systemlink_id = session_id_;
+    }
+  } else {
+    XELOGI("Creating xbox live session");
+    session_id_ = GenerateSessionId(XNKID_ONLINE);
+
+    XLiveAPI::XSessionCreate(session_id_, session_data);
+    XLiveAPI::SessionContextSet(session_id_, contexts_);
+  }
 
   XELOGI("Created session {:016X}", session_id_);
 
-  XLiveAPI::SessionContextSet(session_id_, contexts_);
+  IsValidXNKID(session_id_);
 
+  Uint64toXNKID(session_id_, &session_info->sessionID);
   XLiveAPI::IpGetConsoleXnAddr(&session_info->hostAddress);
 
   return X_ERROR_SUCCESS;
@@ -182,28 +191,34 @@ X_RESULT XSession::JoinExistingSession(XSESSION_INFO* session_info) {
   session_id_ = XNKIDtoUint64(&session_info->sessionID);
   XELOGI("Joining session {:016X}", session_id_);
 
-  assert_true(IsOnlinePeer(session_id_));
+  XSession::IsValidXNKID(session_id_);
 
-  if (session_id_ == 0) {
-    assert_always();
-    return X_E_FAIL;
+  if (IsSystemlink(session_id_)) {
+    XELOGI("Joining systemlink session");
+    is_systemlink_ = true;
+    return X_ERROR_SUCCESS;
+  } else {
+    XELOGI("Joining xbox live session");
   }
 
   const std::unique_ptr<SessionObjectJSON> session =
       XLiveAPI::XSessionGet(session_id_);
 
   // Begin XNetRegisterKey?
-  GetXnAddrFromSessionObject(session.get(), &session_info->hostAddress);
+
+  if (!session->HostAddress().empty()) {
+    GetXnAddrFromSessionObject(session.get(), &session_info->hostAddress);
+  }
 
   return X_ERROR_SUCCESS;
 }
 
 X_RESULT XSession::DeleteSession() {
-  state |= STATE_FLAGS_DELETED;
+  state_ |= STATE_FLAGS_DELETED;
 
   // Begin XNetUnregisterKey?
 
-  if (IsHost()) {
+  if (IsHost() && IsXboxLive()) {
     XLiveAPI::DeleteSession(session_id_);
   }
 
@@ -214,11 +229,11 @@ X_RESULT XSession::DeleteSession() {
   return X_ERROR_SUCCESS;
 }
 
-// A member can be added by either local or remote, typically local members are
-// joined via local but are often joined via remote - they're equivalent.
+// A member can be added by either local or remote, typically local members
+// are joined via local but are often joined via remote - they're equivalent.
 //
-// If there are no private slots available then the member will occupy a public
-// slot instead.
+// If there are no private slots available then the member will occupy a
+// public slot instead.
 //
 // TODO: Add player to recent player list, maybe backend responsibility.
 X_RESULT XSession::JoinSession(XSessionJoin* data) {
@@ -268,12 +283,12 @@ X_RESULT XSession::JoinSession(XSessionJoin* data) {
       member->OnlineXUID = xuid;
       member->UserIndex = user_index;
 
-      local_details_.ActualMemberCount =
-          std::min<int32_t>(MAX_USERS, local_details_.ActualMemberCount + 1);
+      local_details_.ActualMemberCount = std::min<int32_t>(
+          X_USER_MAX_USERS, local_details_.ActualMemberCount + 1);
     } else {
       // Default member
       const xe::be<uint64_t> xuid = xuid_array[i];
-      const uint32_t user_index = XUSER_INDEX_NONE;
+      const uint32_t user_index = X_USER_INDEX_NONE;
 
       const bool is_member_added =
           remote_members_.find(xuid) != remote_members_.end();
@@ -291,8 +306,8 @@ X_RESULT XSession::JoinSession(XSessionJoin* data) {
         const auto profile = kernel_state()->user_profile(xuid);
         member->UserIndex = profile->index();
 
-        local_details_.ActualMemberCount =
-            std::min<int32_t>(MAX_USERS, local_details_.ActualMemberCount + 1);
+        local_details_.ActualMemberCount = std::min<int32_t>(
+            X_USER_MAX_USERS, local_details_.ActualMemberCount + 1);
       }
     }
 
@@ -322,7 +337,7 @@ X_RESULT XSession::JoinSession(XSessionJoin* data) {
 
   local_details_.ReturnedMemberCount = GetMembersCount();
 
-  if (!members.empty() && IsHost()) {
+  if (!members.empty() && IsHost() && IsXboxLive()) {
     XLiveAPI::SessionJoinRemote(session_id_, members);
   }
 
@@ -442,7 +457,7 @@ X_RESULT XSession::LeaveSession(XSessionLeave* data) {
 
   local_details_.ReturnedMemberCount = GetMembersCount();
 
-  if (!xuids.empty() && IsHost()) {
+  if (!xuids.empty() && IsHost() && IsXboxLive()) {
     XLiveAPI::SessionLeaveRemote(session_id_, xuids);
   }
 
@@ -474,7 +489,7 @@ X_RESULT XSession::ModifySession(XSessionModify* data) {
 
   PrintSessionDetails();
 
-  if (IsHost()) {
+  if (IsHost() && IsXboxLive()) {
     XLiveAPI::SessionModify(session_id_, data);
   }
 
@@ -541,8 +556,8 @@ X_RESULT XSession::MigrateHost(XSessionMigate* data) {
   // Update session id to migrated session id
   session_id_ = result->SessionID_UInt();
 
-  state |= STATE_FLAGS_HOST;
-  state |= STATE_FLAGS_MIGRATED;
+  state_ |= STATE_FLAGS_HOST;
+  state_ |= STATE_FLAGS_MIGRATED;
 
   local_details_.UserIndexHost = data->user_index;
   local_details_.sessionInfo = *SessionInfo_ptr;
@@ -614,6 +629,22 @@ X_RESULT XSession::ModifySkill(XSessionModifySkill* data) {
 }
 
 X_RESULT XSession::WriteStats(XSessionWriteStats* data) {
+  if (!HasSessionFlag(static_cast<SessionFlags>((uint32_t)local_details_.Flags),
+                      STATS)) {
+    XELOGW("Session does not support stats.");
+    return X_ERROR_FUNCTION_FAILED;
+  }
+
+  if (local_details_.eState != XSESSION_STATE::INGAME) {
+    XELOGW("Writing stats outside of gameplay.");
+    return X_ERROR_FUNCTION_FAILED;
+  }
+
+  if (!data->number_of_leaderboards) {
+    XELOGW("No leaderboard stats to write.");
+    return X_ERROR_SUCCESS;
+  }
+
   XSessionViewProperties* leaderboard =
       kernel_state_->memory()->TranslateVirtual<XSessionViewProperties*>(
           data->leaderboards_ptr);
@@ -635,14 +666,15 @@ X_RESULT XSession::EndSession() {
   return X_ERROR_SUCCESS;
 }
 
-X_RESULT XSession::GetSessions(Memory* memory, XSessionSearch* search_data) {
+X_RESULT XSession::GetSessions(Memory* memory, XSessionSearch* search_data,
+                               uint32_t num_users) {
   if (!search_data->results_buffer_size) {
     search_data->results_buffer_size =
         sizeof(XSESSION_SEARCHRESULT) * search_data->num_results;
     return ERROR_INSUFFICIENT_BUFFER;
   }
 
-  const auto sessions = XLiveAPI::SessionSearch(search_data);
+  const auto sessions = XLiveAPI::SessionSearch(search_data, num_users);
 
   const uint32_t session_count =
       std::min<int32_t>(search_data->num_results, (uint32_t)sessions.size());
@@ -676,7 +708,7 @@ X_RESULT XSession::GetSessions(Memory* memory, XSessionSearch* search_data) {
 }
 
 X_RESULT XSession::GetSessionByID(Memory* memory,
-                                  XSessionSearchID* search_data) {
+                                  XSessionSearchByID* search_data) {
   if (!search_data->results_buffer_size) {
     search_data->results_buffer_size = sizeof(XSESSION_SEARCHRESULT);
     return ERROR_INSUFFICIENT_BUFFER;
