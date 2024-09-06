@@ -32,6 +32,7 @@ const uint32_t kTitleIdCODNX1 = 0x4156089E;
 const uint32_t kTitleIdCODBO2 = 0x415608C3;
 const uint32_t kTitleIdCODMW3 = 0x415608CB;
 const uint32_t kTitleIdCODMW2 = 0x41560817;
+const uint32_t kTitleIdCODWaW = 0x4156081C;
 const uint32_t kTitleIdCOD4 = 0x415607E6;
 const uint32_t kTitleIdCOD3 = 0x415607E1;
 
@@ -120,7 +121,12 @@ std::map<CallOfDutyGame::GameBuild, GameBuildAddrs> supported_builds{
     {CallOfDutyGame::GameBuild::CallOfDutyNX1_NightlyMPmaps,
      {0x8201DD04, 0x63675F66, kTitleIdCODNX1, 0x3668, NULL, 0x83D060E0,
       0x82B19C50, 0x82531558}},
-};
+    {CallOfDutyGame::GameBuild::CallOfDutyWaW_TU7_SP,
+     {0x82055874, 0x63675F66, kTitleIdCODWaW, 0xEAEC, NULL, 0x824DE870,
+      0x849355D4, NULL}},
+    {CallOfDutyGame::GameBuild::CallOfDutyWaW_TU7_MP,
+     {0x82012704, 0x63675F66, kTitleIdCODWaW, 0x9D64, NULL, 0x85914734,
+      0x824AEBF0, NULL}}};
 
 CallOfDutyGame::~CallOfDutyGame() = default;
 
@@ -129,7 +135,8 @@ bool CallOfDutyGame::IsGameSupported() {
 
   if (title_id != kTitleIdCOD4 && title_id != kTitleIdCOD3 &&
       title_id != kTitleIdCODBO2 && title_id != kTitleIdCODMW2 &&
-      title_id != kTitleIdCODMW3 && title_id != kTitleIdCODNX1) {
+      title_id != kTitleIdCODMW3 && title_id != kTitleIdCODNX1 &&
+      title_id != kTitleIdCODWaW) {
     return false;
   }
 
@@ -237,7 +244,7 @@ bool CallOfDutyGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   }
 
   float divsor;
-  divsor = 12.f / calc_fovscale;
+  divsor = 10.5f / calc_fovscale;
 
   // X-axis = 0 to 360
   if (!cvars::invert_x) {
