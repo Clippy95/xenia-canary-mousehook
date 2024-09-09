@@ -13,6 +13,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
 #include "xenia/kernel/util/shim_utils.h"
+#include "xenia/kernel/xnet.h"
 
 #ifdef XE_PLATFORM_WIN32
 // NOTE: must be included last as it expects windows.h to already be included.
@@ -32,21 +33,6 @@ namespace kernel {
 namespace xam {
 namespace apps {
 
-// TODO(Gliniak): Find better names for these structures!
-struct X_ARGUEMENT_ENTRY {
-  xe::be<uint32_t> magic_number;
-  xe::be<uint32_t> unk_1;
-  xe::be<uint32_t> unk_2;
-  xe::be<uint32_t> object_ptr;
-};
-static_assert_size(X_ARGUEMENT_ENTRY, 0x10);
-
-struct X_ARGUMENT_LIST {
-  X_ARGUEMENT_ENTRY entry[32];
-  xe::be<uint32_t> argument_count;
-};
-static_assert_size(X_ARGUMENT_LIST, 0x204);
-
 XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state)
     : App(kernel_state, 0xFC) {}
 
@@ -59,9 +45,19 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
   auto buffer = memory_->TranslateVirtual(buffer_ptr);
 
   switch (message) {
+    case 0x00050002: {
+      // Current session must have PRESENCE flag.
+
+      XELOGD("XInviteSend({:08X}, {:08X})", buffer_ptr, buffer_length);
+      uint32_t* marshalled_object_ptr =
+          memory_->TranslateVirtual<uint32_t*>(buffer_ptr);
+
+      return X_E_SUCCESS;
+    }
     case 0x00058003: {
       // Called on startup of dashboard (netplay build)
-      XELOGD("XLiveBaseLogonGetHR, unimplemented");
+      XELOGD("XLiveBaseLogonGetHR({:08X}, {:08X})", buffer_ptr, buffer_length);
+      return X_ONLINE_S_LOGON_CONNECTION_ESTABLISHED;
     }
     case 0x0005008C: {
       // Called on startup of blades dashboard v1888 to v2858
@@ -75,8 +71,11 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
     }
     case 0x00050008: {
       // Required to be successful for 534507D4
-      XELOGD("XLiveBaseUnk50008({:08x}, {:08x}) unimplemented", buffer_ptr,
-             buffer_length);
+      // Guess:
+      // XStorageDownloadToMemory -> XStorageDownloadToMemoryGetProgress
+      XELOGD(
+          "XStorageDownloadToMemoryGetProgress({:08x}, {:08x}) unimplemented",
+          buffer_ptr, buffer_length);
       return X_E_SUCCESS;
     }
     case 0x00050009: {
@@ -84,6 +83,11 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
       XELOGD("XStorageDownloadToMemory({:08X}, {:08X}) unimplemented",
              buffer_ptr, buffer_length);
       return XStorageDownloadToMemory(buffer_ptr);
+    }
+    case 0x0005000A: {
+      XELOGD("XStorageEnumerate({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
     }
     case 0x0005000B: {
       // Fixes Xbox Live error for 43430821
@@ -97,18 +101,101 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
     }
     case 0x0005000D: {
       // Fixes hang when leaving session for 545107D5
-      XELOGD("XLiveBaseUnk5000D({:08X}, {:08X}) unimplemented", buffer_ptr,
+      // 415607D2 says this is XStringVerify
+      XELOGD("XStringVerify({:08X}, {:08X})", buffer_ptr, buffer_length);
+      return XStringVerify(buffer_ptr, buffer_length);
+    }
+    case 0x0005000E: {
+      // Before every call there is a call to XUserFindUsers
+      // Success stub:
+      // 584113E8 successfully creates session.
+      // 58410B5D craches.
+      XELOGD("XUserFindUsersResponseSize({:08X}, {:08X}) unimplemented",
+             buffer_ptr, buffer_length);
+      return cvars::stub_xlivebase ? X_E_SUCCESS : X_E_FAIL;
+    }
+    case 0x0005000F: {
+      // 41560855 included from TU 7
+      // Attempts to set a dvar for ui_email_address but fails on
+      // WideCharToMultiByte
+      //
+      // 4D530AA5 encounters "Failed to retrieve account credentials".
+      XELOGD("_XAccountGetUserInfo({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
-      return X_E_SUCCESS;
+      return X_ERROR_FUNCTION_FAILED;
+    }
+    case 0x00050010: {
+      XELOGD("XAccountGetUserInfo({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_ERROR_FUNCTION_FAILED;
+    }
+    case 0x0005801C: {
+      // Called on blades dashboard v1888
+      XELOGD("XLiveBaseUnk5801C({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return Unk5801C(buffer_length);
+    }
+    case 0x00058024: {
+      // Called on blades dashboard v1888
+      XELOGD("XLiveBaseUnk58024({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return Unk58024(buffer_length);
     }
     case 0x00050036: {
       XELOGD("XOnlineQuerySearch({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
       return X_E_SUCCESS;
     }
+    case 0x00050077: {
+      // Called on blades dashboard v1888
+      // Current Balance in sub menus:
+      // All New Demos and Trailers
+      // More Videos and Downloads
+      XELOGD("XLiveBaseUnk50077({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
     case 0x00050079: {
       // Fixes Xbox Live error for 454107DB
       XELOGD("XLiveBaseUnk50079({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x0005008B: {
+      // Called on blades dashboard v1888
+      // Fixes accessing marketplace Featured Downloads.
+      XELOGD("XLiveBaseUnk5008B({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x0005008F: {
+      // Called on blades dashboard v1888
+      // Fixes accessing marketplace sub menus:
+      // All New Demos and Trailers
+      // More Videos and Downloads
+      XELOGD("XLiveBaseUnk5008F({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x00050090: {
+      // Called on blades dashboard v1888
+      // Fixes accessing marketplace Game Downloads->All Games->Xbox Live Arcade
+      // sub menu.
+      XELOGD("XLiveBaseUnk50090({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x00050091: {
+      // Called on blades dashboard v1888
+      // Fixes accessing marketplace Game Downloads.
+      XELOGD("XLiveBaseUnk50091({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x00050097: {
+      // Called on blades dashboard v1888
+      // Fixes accessing marketplace Memberships.
+      XELOGD("XLiveBaseUnk50097({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
       return X_E_SUCCESS;
     }
@@ -134,8 +221,18 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
       return GetServiceInfo(buffer_ptr, buffer_length);
     }
     case 0x00058009: {
-      XELOGD("XContentGetMarketplaceCounts({:08X}, {:08X})", buffer_ptr,
+      XELOGD("XContentGetMarketplaceCounts({:08X}, {:08X}) unimplemented",
+             buffer_ptr, buffer_length);
+      return X_E_SUCCESS;
+    }
+    case 0x0005800C: {
+      XELOGD("XUserMuteListSetState({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
+      X_MUTE_LIST_SET_STATE* mute_list_ptr =
+          memory_->TranslateVirtual<X_MUTE_LIST_SET_STATE*>(buffer_ptr);
+
+      mute_list_ptr->set_muted = !mute_list_ptr->set_muted;
+
       return X_E_SUCCESS;
     }
     case 0x0005800E: {
@@ -145,16 +242,18 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
       return X_E_SUCCESS;
     }
     case 0x00058017: {
-      XELOGD("UserFindUsers({:08X}, {:08X})", buffer_ptr, buffer_length);
-      return X_E_SUCCESS;
-    }
-    case 0x00058019: {
-      XELOGD("XPresenceCreateEnumerator({:08X}, {:08X})", buffer_ptr,
+      XELOGD("XUserFindUsers({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
       return X_E_SUCCESS;
     }
+    case 0x00058019: {
+      XELOGD("XPresenceCreateEnumerator({:08X}, {:08X}) unimplemented",
+             buffer_ptr, buffer_length);
+      return X_E_SUCCESS;
+    }
     case 0x0005801E: {
-      XELOGD("XPresenceSubscribe({:08X}, {:08X})", buffer_ptr, buffer_length);
+      XELOGD("XPresenceSubscribe({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
       return X_E_SUCCESS;
     }
     case 0x00058020: {
@@ -171,7 +270,7 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
           "CXLiveMessaging::XMessageGameInviteGetAcceptedInfo({:08X}, {:08X}) "
           "unimplemented",
           buffer_ptr, buffer_length);
-      return X_E_FAIL;
+      return X_E_SUCCESS;
     }
     case 0x00058032: {
       XELOGD("XGetTaskProgress({:08X}, {:08X}) unimplemented", buffer_ptr,
@@ -186,26 +285,31 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
       return XStorageBuildServerPath(buffer_ptr);
     }
     case 0x00058037: {
-      XELOGD("XPresenceInitialize({:08X}, {:08X})", buffer_ptr, buffer_length);
-      return X_E_SUCCESS;
+      // Used in older games such as Crackdown, FM2, Saints Row 1
+      XELOGD("XPresenceInitializeLegacy({:08X}, {:08X}) unimplemented",
+             buffer_ptr, buffer_length);
+      return XPresenceInitialize(buffer_length);
     }
     case 0x00058044: {
-      XELOGD("XPresenceUnsubscribe({:08X}, {:08X})", buffer_ptr, buffer_length);
+      XELOGD("XPresenceUnsubscribe({:08X}, {:08X}) unimplemented", buffer_ptr,
+             buffer_length);
       return X_E_SUCCESS;
     }
     case 0x00058046: {
+      // Used in newer games such as Forza 4, MW3, FH2
+      //
       // Required to be successful for 4D530910 to detect signed-in profile
       // Doesn't seem to set anything in the given buffer, probably only takes
       // input
       XELOGD("XPresenceInitialize({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
-      return X_E_SUCCESS;
+      return XPresenceInitialize(buffer_length);
     }
   }
 
   auto xlivebase_log = fmt::format(
-      "{} XLIVEBASE message app={:08X}, msg={:08X}, arg1={:08X}, "
-      "arg2={:08X}",
+      "{} XLIVEBASE message app={:08X}, msg={:08X}, buffer_ptr={:08X}, "
+      "buffer_length={:08X}",
       cvars::stub_xlivebase ? "Stubbed" : "Unimplemented", app_id(), message,
       buffer_ptr, buffer_length);
 
@@ -214,29 +318,51 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
   return cvars::stub_xlivebase ? X_E_SUCCESS : X_E_FAIL;
 }
 
+X_HRESULT XLiveBaseApp::XPresenceInitialize(uint32_t buffer_length) {
+  if (!buffer_length) {
+    return X_E_INVALIDARG;
+  }
+
+  Memory* memory = kernel_state_->memory();
+
+  X_ARGUEMENT_ENTRY* entry =
+      memory->TranslateVirtual<X_ARGUEMENT_ENTRY*>(buffer_length);
+
+  uint32_t max_peer_subscriptions =
+      xe::load_and_swap<uint32_t>(memory->TranslateVirtual(entry->object_ptr));
+
+  if (max_peer_subscriptions > X_ONLINE_PEER_SUBSCRIPTIONS) {
+    return X_E_INVALIDARG;
+  }
+
+  return X_E_SUCCESS;
+}
+
 X_HRESULT XLiveBaseApp::GetServiceInfo(uint32_t serviceid,
                                        uint32_t serviceinfo) {
-  if (serviceinfo == NULL) {
+  if (!XLiveAPI::IsOnline()) {
+    return X_ONLINE_E_LOGON_NOT_LOGGED_ON;
+  }
+
+  if (!serviceinfo) {
     return X_E_SUCCESS;
   }
 
-  XONLINE_SERVICE_INFO* service_info =
-      reinterpret_cast<XONLINE_SERVICE_INFO*>(
-          memory_->TranslateVirtual(serviceinfo));
+  X_ONLINE_SERVICE_INFO* service_info_ptr =
+      memory_->TranslateVirtual<X_ONLINE_SERVICE_INFO*>(serviceinfo);
 
-  memset(service_info, 0, sizeof(XONLINE_SERVICE_INFO));
+  memset(service_info_ptr, 0, sizeof(X_ONLINE_SERVICE_INFO));
 
-  XONLINE_SERVICE_INFO retrieved_service_info =
-      XLiveAPI::GetServiceInfoById(serviceid);
+  X_ONLINE_SERVICE_INFO service_info = {};
 
-  if (retrieved_service_info.ip.s_addr == 0) {
-    return 0x80151100;  // ERROR_SERVICE_NOT_FOUND
-    // return 0x80151802;   // ERROR_CONNECTION_INVALID
-    // return -1;           // ERROR_FUNCTION_FAILED
+  HTTP_STATUS_CODE status =
+      XLiveAPI::GetServiceInfoById(serviceid, &service_info);
+
+  if (status != HTTP_STATUS_CODE::HTTP_OK) {
+    return X_ONLINE_E_LOGON_SERVICE_NOT_REQUESTED;
   }
 
-  service_info->ip.s_addr = retrieved_service_info.ip.s_addr;
-  service_info->port = retrieved_service_info.port;
+  memcpy(service_info_ptr, &service_info, sizeof(X_ONLINE_SERVICE_INFO));
 
   return X_E_SUCCESS;
 }
@@ -263,11 +389,15 @@ X_HRESULT XLiveBaseApp::CreateFriendsEnumerator(uint32_t buffer_args) {
   const uint32_t friends_amount = xe::load_and_swap<uint32_t>(
       memory->TranslateVirtual(arg_list->entry[2].object_ptr));
 
-  if (friends_starting_index >= 0x64) {
+  if (user_index >= X_USER_MAX_USERS) {
     return X_E_INVALIDARG;
   }
 
-  if (friends_amount > 0x64) {
+  if (friends_starting_index >= X_ONLINE_MAX_FRIENDS) {
+    return X_E_INVALIDARG;
+  }
+
+  if (friends_amount > X_ONLINE_MAX_FRIENDS) {
     return X_E_INVALIDARG;
   }
 
@@ -285,14 +415,46 @@ X_HRESULT XLiveBaseApp::CreateFriendsEnumerator(uint32_t buffer_args) {
   uint32_t* buffer_ptr = memory->TranslateVirtual<uint32_t*>(buffer_address);
   uint32_t* handle_ptr = memory->TranslateVirtual<uint32_t*>(handle_address);
 
-  // TODO(Gliniak): Enumerator itself stores user_index XUID at enumerator
-  // address + 0x24
-  auto e =
-      make_object<XStaticUntypedEnumerator>(kernel_state_, friends_amount, 0);
-  auto result = e->Initialize(-1, app_id(), 0x58021, 0x58022, 0, 0x10, nullptr);
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
+  }
 
-  const uint32_t received_friends_count = 0;
-  *buffer_ptr = xe::byte_swap<uint32_t>(received_friends_count * 0xC4);
+  auto const profile = kernel_state()->xam_state()->GetUserProfile(user_index);
+
+  auto e = make_object<XStaticEnumerator<X_ONLINE_FRIEND>>(kernel_state_,
+                                                           friends_amount);
+  auto result = e->Initialize(-1, app_id(), 0x58021, 0x58022, 0);
+
+  if (XFAILED(result)) {
+    return result;
+  }
+
+  const std::vector<uint64_t> peer_xuids = profile->GetFriendsXUIDs();
+
+  const auto presences = XLiveAPI::GetFriendsPresence(peer_xuids);
+
+  for (const auto& player : presences->PlayersPresence()) {
+    X_ONLINE_FRIEND peer = player.GetFriendPresence();
+
+    profile->SetFriend(peer);
+  }
+
+  for (auto i = friends_starting_index; i < e->items_per_enumerate(); i++) {
+    X_ONLINE_FRIEND peer = {};
+
+    const bool is_friend = profile->GetFriendFromIndex(i, &peer);
+
+    if (is_friend) {
+      auto item = e->AppendItem();
+
+      memcpy(item, &peer, sizeof(X_ONLINE_FRIEND));
+    }
+  }
+
+  const uint32_t friends_buffer_size =
+      static_cast<uint32_t>(e->items_per_enumerate() * e->item_size());
+
+  *buffer_ptr = xe::byte_swap<uint32_t>(friends_buffer_size);
 
   *handle_ptr = xe::byte_swap<uint32_t>(e->handle());
   return X_E_SUCCESS;
@@ -329,25 +491,13 @@ X_HRESULT XLiveBaseApp::XStorageUploadFromMemory(uint32_t buffer_ptr) {
   return X_E_SUCCESS;
 }
 
-struct XStorageBuildServerPathArgs {
-  xe::be<uint32_t> user_index;
-  char unk[12];
-  xe::be<uint32_t> storage_location;  // 2 means title specific storage,
-                                      // something like developers storage.
-  xe::be<uint32_t> storage_location_info_ptr;
-  xe::be<uint32_t> storage_location_info_size;
-  xe::be<uint32_t> file_name_ptr;
-  xe::be<uint32_t> server_path_ptr;
-  xe::be<uint32_t> server_path_length_ptr;
-};
-
 X_HRESULT XLiveBaseApp::XStorageBuildServerPath(uint32_t buffer_ptr) {
   if (!buffer_ptr) {
     return X_E_INVALIDARG;
   }
 
-  XStorageBuildServerPathArgs* args =
-      kernel_state_->memory()->TranslateVirtual<XStorageBuildServerPathArgs*>(
+  X_STORAGE_BUILD_SERVER_PATH* args =
+      kernel_state_->memory()->TranslateVirtual<X_STORAGE_BUILD_SERVER_PATH*>(
           buffer_ptr);
 
   uint8_t* filename_ptr =
@@ -378,6 +528,44 @@ X_HRESULT XLiveBaseApp::XStorageBuildServerPath(uint32_t buffer_ptr) {
     *server_path_length =
         xe::byte_swap<uint32_t>(uint32_t(endpoint_API.size()));
   }
+
+  return X_E_SUCCESS;
+}
+
+X_HRESULT XLiveBaseApp::Unk58024(uint32_t buffer_length) {
+  if (!buffer_length) {
+    return X_E_INVALIDARG;
+  }
+
+  Memory* memory = kernel_state_->memory();
+
+  X_DATA_58024* entry = memory->TranslateVirtual<X_DATA_58024*>(buffer_length);
+
+  uint64_t xuid = xe::load_and_swap<uint64_t>(
+      memory->TranslateVirtual(entry->xuid.object_ptr));
+  uint32_t ukn2 = xe::load_and_swap<uint32_t>(
+      memory->TranslateVirtual(entry->ukn2.object_ptr));
+  uint32_t ukn3_ptr = xe::load_and_swap<uint32_t>(
+      memory->TranslateVirtual(entry->ukn3.object_ptr));
+
+  return X_E_SUCCESS;
+}
+
+X_HRESULT XLiveBaseApp::Unk5801C(uint32_t buffer_length) {
+  if (!buffer_length) {
+    return X_E_INVALIDARG;
+  }
+
+  Memory* memory = kernel_state_->memory();
+
+  X_DATA_5801C* entry = memory->TranslateVirtual<X_DATA_5801C*>(buffer_length);
+
+  uint64_t xuid = xe::load_and_swap<uint64_t>(
+      memory->TranslateVirtual(entry->xuid.object_ptr));
+  uint32_t ukn2 = xe::load_and_swap<uint32_t>(
+      memory->TranslateVirtual(entry->ukn2.object_ptr));
+  uint32_t ukn3_ptr = xe::load_and_swap<uint32_t>(
+      memory->TranslateVirtual(entry->ukn3.object_ptr));
 
   return X_E_SUCCESS;
 }
