@@ -1599,6 +1599,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     }
   }
 
+  const uint32_t kTitleIdCODGhostsDEV = 0x4156088E;
   const uint32_t kTitleIdCODNX1 = 0x4156089E;
   const uint32_t kTitleIdCODBO2 = 0x415608C3;
   const uint32_t kTitleIdCODMW3 = 0x415608CB;
@@ -1613,7 +1614,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
         module->title_id() == kTitleIdCODBO2 ||
         module->title_id() == kTitleIdCODNX1 ||
         module->title_id() == kTitleIdCOD3 ||
-        module->title_id() == kTitleIdCODWaW) {
+        module->title_id() == kTitleIdCODWaW ||
+        module->title_id() == kTitleIdCODGhostsDEV) {
       struct CODPatchOffsets {
         uint32_t cg_fov_address;
         uint32_t cg_fov;
@@ -1700,6 +1702,10 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
 
           // Call Of Duty World At War TU7 MP
           {0x82012704, 0x63675F66, 0x82124C10, 0},
+          // CallOfDutyGhosts_IW6_DEV_2iw6mp
+          {0x820BB320, 0x63675F66, 0x82293F50, 0},
+          // CallOfDutyGhosts_IW6_DEV_1iw6sp
+          {0x82032648, 0x63675F66, 0x82224b10, 0},
       };
 
       for (auto& build : supported_builds) {
