@@ -159,9 +159,9 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
     if (fov <= 0.5f) {
       fov = 0.5f;
     }
-    divisor = 1000.f * fov;
+    divisor = 850.5f * fov;
   } else
-    divisor = 1000.f;
+    divisor = 850.5f;
 
   if (supported_builds[game_build_].cover_base_address != NULL) {
     xe::be<uint32_t>* cam_type_result =
