@@ -1761,7 +1761,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       if (*test_addr != build.check_value) {
         continue;
       }
-      patch_addr(build.auto_center_read_address, build.BENop);
+      // patch_addr(build.auto_center_read_address, build.BENop);
       if (cvars::disable_autoaim && build.aim_assist_function_address) {
         patch_addr(build.aim_assist_function_address, build.BEStub);
       }

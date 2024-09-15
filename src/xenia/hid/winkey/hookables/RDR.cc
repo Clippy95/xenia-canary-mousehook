@@ -46,27 +46,30 @@ struct GameBuildAddrs {
   uint32_t cover_base_address;
   uint32_t x_cover_offset;
   uint32_t y_cover_offset;
-  uint32_t mounted_x_offset_from_cover;
+  uint32_t mounted_base_address;
+  uint32_t mounted_x_offset;
   uint32_t cam_type_address;
   uint32_t cam_type_offset;
   uint32_t pause_flag_address;
   uint32_t fovscale_base_address;
+  uint32_t fovscale_offset;  // unused for now..
   uint32_t weapon_wheel_status;
 };
 
 std::map<RedDeadRedemptionGame::GameBuild, GameBuildAddrs> supported_builds{
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk1,
-     {"12.0", 0x82010BEC, 0x7A3A5C72, 0x8309C298, 0x460, 0x45C, 0x458, 0x3EC,
-      0xBE684000, 0x820D6A8C, 0xF1F, 0x103F, 0x5680, 0x820D68E8, 0x794B,
-      0x82F79E77, 0xBBC66D78, NULL}},
+     {"12.0", 0x82010BEC, 0x7A3A5C72, 0x8309C298, 0x460,
+      0x45C,  0x458,      0x3EC,      0xBE684000, 0x820D6A8C,
+      0xF1F,  0x103F,     0xBBC67E24, 0x2B0,      0x820D68E8,
+      0x794B, 0x82F79E77, 0xBE67B5C0, 0x514DC,    NULL}},
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk2,
-     {"12.0", 0x82010C0C, 0x7A3A5C72, 0x8309C298, 0x460, 0x45C, 0x458, 0x3EC,
-      0xBE63AB24, 0x8305D6BC, 0x477880, 0x4779A0, NULL, 0x8305D684, 0x4D0D4B,
-      0x82F79E77, 0xBBC66D78, NULL}},
+     {"12.0",     0x82010C0C, 0x7A3A5C72, 0x8309C298, 0x460,    0x45C, 0x458,
+      0x3EC,      0xBE63AB24, 0x8305D6BC, 0x477880,   0x4779A0, NULL,  NULL,
+      0x8305D684, 0x4D0D4B,   0x82F79E77, 0xBE6575C0, 0x514DC,  NULL}},
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_Original_TU0,
-     {"1.0", NULL, NULL, 0x830641D8, 0x460, 0x45C, 0x458, 0x3EC, 0xBE65B73C,
-      0xBE661AC8, 0x1A0, 0x2C0, NULL, 0xBE68A060, 0xB, 0x82F49B73,
-      0xBE64CEAC}}};
+     {"1.0",      NULL,       NULL,       0x830641D8, 0x460, 0x45C, 0x458,
+      0x3EC,      0xBE65B73C, 0xBE661AC8, 0x1A0,      0x2C0, NULL,  NULL,
+      0xBE68A060, 0xB,        0x82F49B73, 0xBE64CEAC, NULL,  NULL}}};
 
 RedDeadRedemptionGame::~RedDeadRedemptionGame() = default;
 
@@ -146,23 +149,36 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
     return false;
   }
 
+  // static uint32_t saved_fovscale_address = 0;
   float divisor;
   if (supported_builds[game_build_].fovscale_base_address != NULL) {
     xe::be<uint32_t>* fovscale_address =
         kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
             supported_builds[game_build_].fovscale_base_address);
-    xe::be<uint32_t> fovscale_address_result = +0x880;
+    /* if (fovscale_address && *fovscale_address >= 0xA0000000 &&
+            *fovscale_address < 0xC0000000 ||
+        saved_fovscale_address > 0xA0000000) {
+      saved_fovscale_address = *fovscale_address;
+    }*/
+    // printf("saved_fovscale_address: %08X\n",
+    // (uint32_t)saved_fovscale_address); xe::be<uint32_t> fovscale_result =
+    // fovscale_address;
+    // printf("fovscale_result: %08X\n", (uint32_t)fovscale_result);
     xe::be<float>* fovscale = kernel_memory()->TranslateVirtual<xe::be<float>*>(
-        fovscale_address_result);
-
+        supported_builds[game_build_].fovscale_base_address);
     float fov = *fovscale;
-    if (fov <= 0.5f) {
-      fov = 0.5f;
+    if (fov <= 0.5f || fov > 35.f) {
+      fov = 1.f;
     }
-    divisor = 850.5f * fov;
-  } else
-    divisor = 850.5f;
 
+    divisor = 850.5f * fov;
+
+    printf("fov: %f divisor: %f\n", fov, divisor);
+  }
+
+  else {
+    divisor = 850.5f;
+  }
   if (supported_builds[game_build_].cover_base_address != NULL) {
     xe::be<uint32_t>* cam_type_result =
         kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
@@ -191,13 +207,33 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
       *radian_x_cover = camX;
 
       *radian_y_cover = camY;
-      if (supported_builds[game_build_].mounted_x_offset_from_cover != NULL) {
-        xe::be<float>* radian_x_mounted =
-            kernel_memory()->TranslateVirtual<xe::be<float>*>(
-                x_cover_address -
-                supported_builds[game_build_].mounted_x_offset_from_cover);
-        *radian_x_mounted = camX;
-      }
+
+    } else if (cam_type && *cam_type == 7) {
+      xe::be<uint32_t>* cover_base =
+          kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+              supported_builds[game_build_].cover_base_address);
+      xe::be<uint32_t>* mounted_base =
+          kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+              supported_builds[game_build_].mounted_base_address);
+      xe::be<uint32_t> y_cover_address =
+          *cover_base + supported_builds[game_build_].y_cover_offset;
+      xe::be<uint32_t> x_mounted_cover_address =
+          *mounted_base + supported_builds[game_build_].mounted_x_offset;
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(y_cover_address);
+      xe::be<float>* radian_y_cover =
+          kernel_memory()->TranslateVirtual<xe::be<float>*>(y_cover_address);
+      float camY = *radian_y_cover;
+      xe::be<float>* radian_x_mounted_cover =
+          kernel_memory()->TranslateVirtual<xe::be<float>*>(
+              x_mounted_cover_address);
+      float camX = *radian_x_mounted_cover;
+      camX -=
+          ((input_state.mouse.x_delta * (float)cvars::sensitivity) / divisor);
+      camY -=
+          ((input_state.mouse.y_delta * (float)cvars::sensitivity) / divisor);
+      *radian_x_mounted_cover = camX;
+
+      *radian_y_cover = camY;
     }
   }
 
