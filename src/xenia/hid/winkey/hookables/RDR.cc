@@ -58,10 +58,11 @@ std::map<RedDeadRedemptionGame::GameBuild, GameBuildAddrs> supported_builds{
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk1,
      {"12.0", 0x82010BEC, 0x7A3A5C72, 0x8309C298, 0x460, 0x45C, 0x458, 0x3EC,
       0xBE684000, 0x820D6A8C, 0xF1F, 0x103F, 0x5680, 0x820D68E8, 0x794B,
-      0x82F79E77, 0xBE67B80C, 0xBEA580F3}},
+      0x82F79E77, 0xBBC66D78, NULL}},
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk2,
      {"12.0", 0x82010C0C, 0x7A3A5C72, 0x8309C298, 0x460, 0x45C, 0x458, 0x3EC,
-      0xBE641960, NULL, NULL, NULL}},
+      0xBE63AB24, 0x8305D6BC, 0x477880, 0x4779A0, NULL, 0x8305D684, 0x4D0D4B,
+      0x82F79E77, 0xBBC66D78, NULL}},
     {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_Original_TU0,
      {"1.0", NULL, NULL, 0x830641D8, 0x460, 0x45C, 0x458, 0x3EC, 0xBE65B73C,
       0xBE661AC8, 0x1A0, 0x2C0, NULL, 0xBE68A060, 0xB, 0x82F49B73,
@@ -150,7 +151,7 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
     xe::be<uint32_t>* fovscale_address =
         kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
             supported_builds[game_build_].fovscale_base_address);
-    xe::be<uint32_t> fovscale_address_result = +0xD0;
+    xe::be<uint32_t> fovscale_address_result = +0x880;
     xe::be<float>* fovscale = kernel_memory()->TranslateVirtual<xe::be<float>*>(
         fovscale_address_result);
 
