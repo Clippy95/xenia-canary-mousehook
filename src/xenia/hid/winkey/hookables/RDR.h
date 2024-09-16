@@ -2,13 +2,12 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2023 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
-#ifndef XENIA_HID_WINKEY_RedDeadRedemption_H_
-#define XENIA_HID_WINKEY_RedDeadRedemption_H_
+#ifndef XENIA_HID_WINKEY_REDEADREDEMPTION_H_
+#define XENIA_HID_WINKEY_REDEADREDEMPTION_H_
 
 #include "xenia/base/chrono.h"
 #include "xenia/hid/winkey/hookables/hookable_game.h"
@@ -45,10 +44,22 @@ class RedDeadRedemptionGame : public HookableGame {
   GameBuild game_build_ = GameBuild::Unknown;
   std::chrono::steady_clock::time_point last_movement_time_x_;
   std::chrono::steady_clock::time_point last_movement_time_y_;
+
+  // New helper functions for internal use
+  bool CheckPauseFlag();
+  float CalculateFOVDivisor();
+  void HandleCoverOrMountedCamera(RawInputState& input_state, float divisor);
+  void AdjustCameraCover(RawInputState& input_state, float divisor);
+  void AdjustMountedCamera(RawInputState& input_state, float divisor);
+  void UpdateCoverCenter(RawInputState& input_state);
+  void UpdateCameraPosition(RawInputState& input_state, float divisor,
+                            xe::be<uint32_t>* base_address);
+  void ApplyAutoCentering(RawInputState& input_state);
+  void ApplyMountingCenter(RawInputState& input_state);
 };
 
 }  // namespace winkey
 }  // namespace hid
 }  // namespace xe
 
-#endif  // XENIA_HID_WINKEY_RedDeadRedemption_H_
+#endif  // XENIA_HID_WINKEY_REDEADREDEMPTION_H_
