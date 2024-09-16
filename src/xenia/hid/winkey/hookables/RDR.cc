@@ -267,7 +267,21 @@ void RedDeadRedemptionGame::UpdateCameraPosition(
       *base_address - supported_builds[game_build_].y_offset;
   xe::be<uint32_t> z_address =
       *base_address - supported_builds[game_build_].z_offset;
+  if (supported_builds[game_build_].cam_type_address != NULL) {
+    xe::be<uint32_t>* cam_type_result =
+        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+            supported_builds[game_build_].cam_type_address);
+    xe::be<uint32_t> cam_byte_read =
+        *cam_type_result + supported_builds[game_build_].cam_type_offset;
+    auto* cam_type = kernel_memory()->TranslateVirtual<uint8_t*>(cam_byte_read);
 
+    if (cam_type &&
+        (*cam_type == 10 || *cam_type == 13)) {  // Carriage & Mine Cart Cam
+      x_address -= 0x810;
+      y_address -= 0x810;
+      z_address -= 0x810;
+    }
+  }
   xe::be<float>* degree_x_act =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(x_address);
   xe::be<float>* degree_y_act =
