@@ -32,21 +32,6 @@ namespace kernel {
 namespace xam {
 namespace apps {
 
-// TODO(Gliniak): Find better names for these structures!
-struct X_ARGUEMENT_ENTRY {
-  xe::be<uint32_t> magic_number;
-  xe::be<uint32_t> unk_1;
-  xe::be<uint32_t> unk_2;
-  xe::be<uint32_t> object_ptr;
-};
-static_assert_size(X_ARGUEMENT_ENTRY, 0x10);
-
-struct X_ARGUMENT_LIST {
-  X_ARGUEMENT_ENTRY entry[32];
-  xe::be<uint32_t> argument_count;
-};
-static_assert_size(X_ARGUMENT_LIST, 0x204);
-
 XLiveBaseApp::XLiveBaseApp(KernelState* kernel_state)
     : App(kernel_state, 0xFC) {}
 
@@ -223,15 +208,8 @@ X_HRESULT XLiveBaseApp::DispatchMessageSync(uint32_t message,
     case 0x0005800C: {
       XELOGD("XUserMuteListSetState({:08X}, {:08X}) unimplemented", buffer_ptr,
              buffer_length);
-
-      struct MuteListSetState {
-        xe::be<uint32_t> user_index;
-        xe::be<uint64_t> remote_xuid;
-        bool set_muted;
-      };
-
-      MuteListSetState* mute_list_ptr =
-          memory_->TranslateVirtual<MuteListSetState*>(buffer_ptr);
+      X_MUTE_LIST_SET_STATE* mute_list_ptr =
+          memory_->TranslateVirtual<X_MUTE_LIST_SET_STATE*>(buffer_ptr);
 
       mute_list_ptr->set_muted = !mute_list_ptr->set_muted;
 
@@ -342,26 +320,29 @@ X_HRESULT XLiveBaseApp::XPresenceInitialize(uint32_t buffer_length) {
 
 X_HRESULT XLiveBaseApp::GetServiceInfo(uint32_t serviceid,
                                        uint32_t serviceinfo) {
-  if (serviceinfo == NULL) {
+  if (!XLiveAPI::IsOnline()) {
+    return X_ONLINE_E_LOGON_NOT_LOGGED_ON;
+  }
+
+  if (!serviceinfo) {
     return X_E_SUCCESS;
   }
 
-  XONLINE_SERVICE_INFO* service_info = reinterpret_cast<XONLINE_SERVICE_INFO*>(
-      memory_->TranslateVirtual(serviceinfo));
+  X_ONLINE_SERVICE_INFO* service_info_ptr =
+      memory_->TranslateVirtual<X_ONLINE_SERVICE_INFO*>(serviceinfo);
 
-  memset(service_info, 0, sizeof(XONLINE_SERVICE_INFO));
+  memset(service_info_ptr, 0, sizeof(X_ONLINE_SERVICE_INFO));
 
-  XONLINE_SERVICE_INFO retrieved_service_info =
-      XLiveAPI::GetServiceInfoById(serviceid);
+  X_ONLINE_SERVICE_INFO service_info = {};
 
-  if (retrieved_service_info.ip.s_addr == 0) {
-    return X_ERROR_SERVICE_NOT_FOUND;
-    // return X_ERROR_CONNECTION_INVALID;
-    // return -1;           // ERROR_FUNCTION_FAILED
+  HTTP_STATUS_CODE status =
+      XLiveAPI::GetServiceInfoById(serviceid, &service_info);
+
+  if (status != HTTP_STATUS_CODE::HTTP_OK) {
+    return X_ONLINE_E_LOGON_SERVICE_NOT_REQUESTED;
   }
 
-  service_info->ip.s_addr = retrieved_service_info.ip.s_addr;
-  service_info->port = retrieved_service_info.port;
+  memcpy(service_info_ptr, &service_info, sizeof(X_ONLINE_SERVICE_INFO));
 
   return X_E_SUCCESS;
 }
@@ -458,25 +439,13 @@ X_HRESULT XLiveBaseApp::XStorageUploadFromMemory(uint32_t buffer_ptr) {
   return X_E_SUCCESS;
 }
 
-struct XStorageBuildServerPathArgs {
-  xe::be<uint32_t> user_index;
-  char unk[12];
-  xe::be<uint32_t> storage_location;  // 2 means title specific storage,
-                                      // something like developers storage.
-  xe::be<uint32_t> storage_location_info_ptr;
-  xe::be<uint32_t> storage_location_info_size;
-  xe::be<uint32_t> file_name_ptr;
-  xe::be<uint32_t> server_path_ptr;
-  xe::be<uint32_t> server_path_length_ptr;
-};
-
 X_HRESULT XLiveBaseApp::XStorageBuildServerPath(uint32_t buffer_ptr) {
   if (!buffer_ptr) {
     return X_E_INVALIDARG;
   }
 
-  XStorageBuildServerPathArgs* args =
-      kernel_state_->memory()->TranslateVirtual<XStorageBuildServerPathArgs*>(
+  X_STORAGE_BUILD_SERVER_PATH* args =
+      kernel_state_->memory()->TranslateVirtual<X_STORAGE_BUILD_SERVER_PATH*>(
           buffer_ptr);
 
   uint8_t* filename_ptr =
@@ -518,13 +487,7 @@ X_HRESULT XLiveBaseApp::Unk58024(uint32_t buffer_length) {
 
   Memory* memory = kernel_state_->memory();
 
-  struct data {
-    X_ARGUEMENT_ENTRY xuid;
-    X_ARGUEMENT_ENTRY ukn2;  // 125
-    X_ARGUEMENT_ENTRY ukn3;  // 0
-  };
-
-  data* entry = memory->TranslateVirtual<data*>(buffer_length);
+  X_DATA_58024* entry = memory->TranslateVirtual<X_DATA_58024*>(buffer_length);
 
   uint64_t xuid = xe::load_and_swap<uint64_t>(
       memory->TranslateVirtual(entry->xuid.object_ptr));
@@ -543,13 +506,7 @@ X_HRESULT XLiveBaseApp::Unk5801C(uint32_t buffer_length) {
 
   Memory* memory = kernel_state_->memory();
 
-  struct data {
-    X_ARGUEMENT_ENTRY xuid;
-    X_ARGUEMENT_ENTRY ukn2;
-    X_ARGUEMENT_ENTRY ukn3;
-  };
-
-  data* entry = memory->TranslateVirtual<data*>(buffer_length);
+  X_DATA_5801C* entry = memory->TranslateVirtual<X_DATA_5801C*>(buffer_length);
 
   uint64_t xuid = xe::load_and_swap<uint64_t>(
       memory->TranslateVirtual(entry->xuid.object_ptr));

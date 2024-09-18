@@ -33,6 +33,11 @@ DEFINE_bool(log_mask_ips, true, "Do not include P2P IPs inside the log",
 DEFINE_bool(offline_mode, false, "Offline Mode e.g. not connected to a LAN",
             "Live");
 
+DEFINE_bool(xlink_kai_systemlink_hack, false,
+            "Enable hacks for XLink Kai support. May break some games. See: "
+            "https://www.teamxlink.co.uk/wiki/Xenia_Support",
+            "Live");
+
 DEFINE_string(network_guid, "", "Network Interface GUID", "Live");
 
 DECLARE_string(upnp_root);
@@ -60,13 +65,17 @@ namespace kernel {
 void XLiveAPI::IpGetConsoleXnAddr(XNADDR* XnAddr_ptr) {
   memset(XnAddr_ptr, 0, sizeof(XNADDR));
 
-  if (IsOnline()) {
-    XnAddr_ptr->ina = OnlineIP().sin_addr;
-    XnAddr_ptr->inaOnline = OnlineIP().sin_addr;
+  if (!cvars::offline_mode) {
+    if (IsOnline() && adapter_has_wan_routing) {
+      XnAddr_ptr->ina = OnlineIP().sin_addr;
+      XnAddr_ptr->inaOnline = OnlineIP().sin_addr;
+    } else {
+      XnAddr_ptr->ina = LocalIP().sin_addr;
+      XnAddr_ptr->inaOnline = LocalIP().sin_addr;
+    }
+
     XnAddr_ptr->wPortOnline = GetPlayerPort();
   }
-
-  // XnAddr_ptr->ina = LocalIP().sin_addr;
 
   memcpy(XnAddr_ptr->abEnet, mac_address_->raw(), sizeof(MacAddress));
   memcpy(XnAddr_ptr->abOnline, mac_address_->raw(), sizeof(MacAddress));
@@ -208,7 +217,7 @@ void XLiveAPI::Init() {
 
   if (!IsOnline()) {
     // Assign online ip as local ip to ensure XNADDR is not 0 for systemlink
-    online_ip_ = local_ip_;
+    // online_ip_ = local_ip_;
 
     // Fixes 4D53085F from crashing when joining via systemlink.
     kernel_state()->BroadcastNotification(0x02000001,
@@ -230,6 +239,8 @@ void XLiveAPI::Init() {
 
   if (player->XUID() != kernel_state()->user_profile((uint32_t)0)->xuid()) {
     XELOGI("XLiveAPI:: Player 0 XUID mismatch!");
+    xuid_mismatch = true;
+
     assert_always();
   }
 
@@ -250,7 +261,8 @@ void XLiveAPI::clearXnaddrCache() {
 }
 
 // Request data from the server
-std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::Get(std::string endpoint) {
+std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::Get(std::string endpoint,
+                                                      const uint32_t timeout) {
   response_data chunk = {};
   CURL* curl_handle = curl_easy_init();
   CURLcode result;
@@ -281,6 +293,10 @@ std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::Get(std::string endpoint) {
 
   if (headers == NULL) {
     return PraseResponse(chunk);
+  }
+
+  if (timeout > 0) {
+    curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, timeout);
   }
 
   curl_easy_setopt(curl_handle, CURLOPT_URL, endpoint_API.c_str());
@@ -439,7 +455,9 @@ std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::Delete(std::string endpoint) {
 
 // Check connection to xenia web server.
 sockaddr_in XLiveAPI::Getwhoami() {
-  std::unique_ptr<HTTPResponseObjectJSON> response = Get("whoami");
+  const uint32_t timeout = 3;
+
+  std::unique_ptr<HTTPResponseObjectJSON> response = Get("whoami", timeout);
 
   sockaddr_in addr{};
 
@@ -1002,7 +1020,7 @@ std::unique_ptr<SessionObjectJSON> XLiveAPI::XSessionGet(uint64_t sessionId) {
   return session;
 }
 
-std::vector<XTitleServer> XLiveAPI::GetServers() {
+std::vector<X_TITLE_SERVER> XLiveAPI::GetServers() {
   std::string endpoint =
       fmt::format("title/{:08X}/servers", kernel_state()->title_id());
 
@@ -1025,7 +1043,7 @@ std::vector<XTitleServer> XLiveAPI::GetServers() {
   doc.Parse(response->RawResponse().response);
 
   for (const auto& server_data : doc.GetArray()) {
-    XTitleServer server{};
+    X_TITLE_SERVER server{};
 
     server.server_address = ip_to_in_addr(server_data["address"].GetString());
 
@@ -1043,34 +1061,35 @@ std::vector<XTitleServer> XLiveAPI::GetServers() {
   return xlsp_servers;
 }
 
-XONLINE_SERVICE_INFO XLiveAPI::GetServiceInfoById(uint32_t serviceId) {
+HTTP_STATUS_CODE XLiveAPI::GetServiceInfoById(
+    uint32_t serviceId, X_ONLINE_SERVICE_INFO* session_info) {
   std::string endpoint = fmt::format("title/{:08X}/services/{:08X}",
                                      kernel_state()->title_id(), serviceId);
 
   std::unique_ptr<HTTPResponseObjectJSON> response = Get(endpoint);
 
-  XONLINE_SERVICE_INFO service{};
+  HTTP_STATUS_CODE status =
+      static_cast<HTTP_STATUS_CODE>(response->StatusCode());
 
-  if (response->StatusCode() != HTTP_STATUS_CODE::HTTP_OK) {
+  if (status != HTTP_STATUS_CODE::HTTP_OK) {
     XELOGE("GetServiceById error message: {}", response->Message());
     assert_always();
 
-    return service;
+    return status;
   }
 
   Document doc;
   doc.Parse(response->RawResponse().response);
 
   for (const auto& service_info : doc.GetArray()) {
-    service.ip = ip_to_in_addr(service_info["address"].GetString());
-
     XELOGD("GetServiceById IP: {}", service_info["address"].GetString());
 
-    service.port = service_info["port"].GetInt();
-    service.id = serviceId;
+    session_info->ip = ip_to_in_addr(service_info["address"].GetString());
+    session_info->port = service_info["port"].GetInt();
+    session_info->id = serviceId;
   }
 
-  return service;
+  return status;
 }
 
 void XLiveAPI::SessionJoinRemote(uint64_t sessionId,
@@ -1316,11 +1335,15 @@ bool XLiveAPI::UpdateNetworkInterface(sockaddr_in local_ip,
       if (cvars::network_guid.empty()) {
         if (local_ip.sin_addr.s_addr == adapter_addr.sin_addr.s_addr ||
             local_ip.sin_addr.s_addr == 0) {
+          adapter_has_wan_routing =
+              (local_ip.sin_addr.s_addr == adapter_addr.sin_addr.s_addr);
           local_ip_ = adapter_addr;
           OVERRIDE_string(network_guid, adapter.AdapterName);
           return true;
         }
       } else {
+        adapter_has_wan_routing =
+            local_ip.sin_addr.s_addr == adapter_addr.sin_addr.s_addr;
         local_ip_ = adapter_addr;
         OVERRIDE_string(network_guid, adapter.AdapterName);
         return true;
@@ -1394,7 +1417,12 @@ void XLiveAPI::SelectNetworkInterface() {
     }
   }
 
-  XELOGI("Set network interface: {} {}", interface_name, cvars::network_guid);
+  std::string WAN_interface = xe::kernel::XLiveAPI::adapter_has_wan_routing
+                                  ? "(Internet)"
+                                  : "(No Internet)";
+
+  XELOGI("Set network interface: {} {} {} {}", interface_name,
+         cvars::network_guid, LocalIP_str(), WAN_interface);
 
   assert_false(cvars::network_guid == "");
 }

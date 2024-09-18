@@ -105,7 +105,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       uint32_t num_users = 0;
 
       for (uint32_t i = 0; i < X_USER_MAX_USERS; i++) {
-        if (kernel_state()->user_profile(i)) {
+        if (kernel_state()->IsUserSignedIn(i)) {
           num_users++;
         }
       }
@@ -158,6 +158,8 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return session->MigrateHost(data);
     }
     case 0x000B0021: {
+      XELOGI("XUserReadStats");
+
       struct XLeaderboard {
         xe::be<uint32_t> titleId;
         xe::be<uint32_t> xuids_count;
@@ -182,11 +184,19 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       for (unsigned int playerIndex = 0; playerIndex < data->xuids_count;
            playerIndex++) {
-        std::string xuid = to_hex_string(xuids[playerIndex]);
+        xe::be<uint64_t> xuid = xuids[playerIndex];
 
-        Value value;
-        value.SetString(xuid.c_str(), 16, doc.GetAllocator());
-        xuidsJsonArray.PushBack(value, doc.GetAllocator());
+        if (xuid) {
+          std::string xuid_str = xe::string_util::to_hex_string(xuid);
+
+          Value value;
+          value.SetString(xuid_str.c_str(), 16, doc.GetAllocator());
+          xuidsJsonArray.PushBack(value, doc.GetAllocator());
+        }
+      }
+
+      if (xuidsJsonArray.Empty()) {
+        return X_E_SUCCESS;
       }
 
       doc.AddMember("players", xuidsJsonArray, doc.GetAllocator());
@@ -545,6 +555,14 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XSessionSearchByID* data = reinterpret_cast<XSessionSearchByID*>(buffer);
 
       return XSession::GetSessionByID(memory_, data);
+    }
+    case 0x000B0060: {
+      XELOGI("XSessionSearchByIds");
+
+      XSessionSearchByIDs* data =
+          reinterpret_cast<XSessionSearchByIDs*>(buffer);
+
+      return XSession::GetSessionByIDs(memory_, data);
     }
     case 0x000B0065: {
       XELOGI("XSessionSearchWeighted unimplemented");

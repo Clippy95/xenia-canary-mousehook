@@ -40,13 +40,13 @@
 
 #include <xenia/kernel/XLiveAPI.h>
 
-DECLARE_string(api_address);
-
 DECLARE_bool(logging);
 
 DECLARE_bool(log_mask_ips);
 
 DECLARE_bool(offline_mode);
+
+DECLARE_bool(xlink_kai_systemlink_hack);
 
 enum XNET_QOS {
   LISTEN_ENABLE = 0x01,
@@ -868,7 +868,7 @@ dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
           xe::byte_swap(XLiveAPI::sessionIdCache[xn_addr->inaOnline.s_addr]);
     }
 
-    XSession::IsValidXNKID(xe::byte_swap(*sessionId_ptr));
+    XSession::IsValidXNKID(*sessionId_ptr);
   }
 
   return X_STATUS_SUCCESS;
@@ -1055,7 +1055,7 @@ dword_result_t NetDll_XNetQosListen_entry(
     return X_ERROR_SUCCESS;
   }
 
-  const uint64_t session_id = xe::byte_swap(sessionId->as_uint64());
+  const uint64_t session_id = sessionId->as_uintBE64();
 
   XSession::IsValidXNKID(session_id);
 
@@ -1207,7 +1207,7 @@ dword_result_t NetDll_XNetQosLookup_entry(
   const uint32_t probes = qos->count - countOffset;
 
   for (uint32_t i = 0; i < probes; i++) {
-    uint64_t session_id = xe::byte_swap(session_ids[i].as_uint64());
+    uint64_t session_id = session_ids[i].as_uintBE64();
     response_data chunk = XLiveAPI::QoSGet(session_id);
 
     if (chunk.http_code == HTTP_STATUS_CODE::HTTP_OK ||
@@ -1474,14 +1474,32 @@ dword_result_t NetDll_bind_entry(dword_t caller, dword_t socket_handle,
     return -1;
   }
 
+  if (!XLiveAPI::adapter_has_wan_routing && cvars::xlink_kai_systemlink_hack) {
+    // Force socket to bind to the IP of the selected interface
+    name->address_ip = XLiveAPI::LocalIP().sin_addr;
+  }
+
   X_STATUS status = socket->Bind(name, namelen);
   if (XFAILED(status)) {
     XThread::SetLastError(socket->GetLastWSAError());
     return -1;
   }
 
+  auto upnp_internal_port = name->address_port;
+  const uint16_t mapped_internal_port =
+      XLiveAPI::upnp_handler->GetMappedBindPort(name->address_port);
+
+  // Support wildcard port
+  if (!upnp_internal_port || !mapped_internal_port) {
+    upnp_internal_port = socket->bound_port();
+  }
+
+  if (cvars::logging) {
+    XELOGI("Bind port {}", upnp_internal_port);
+  }
+
   // Can be called multiple times.
-  XLiveAPI::upnp_handler->AddPort(XLiveAPI::LocalIP_str(), socket->bound_port(),
+  XLiveAPI::upnp_handler->AddPort(XLiveAPI::LocalIP_str(), upnp_internal_port,
                                   "UDP");
 
   return 0;
@@ -1903,7 +1921,7 @@ dword_result_t NetDll_XNetRegisterKey_entry(dword_t caller,
                                             pointer_t<XNKID> session_key,
                                             pointer_t<XNKEY> exchange_key) {
   // Very hacky needs fixing!
-  XLiveAPI::systemlink_id = session_key->as_uint64();
+  XLiveAPI::systemlink_id = session_key->as_uintBE64();
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetRegisterKey, kNetworking, kStub);

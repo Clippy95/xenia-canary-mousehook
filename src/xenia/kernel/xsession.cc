@@ -149,7 +149,7 @@ X_RESULT XSession::CreateHostSession(XSESSION_INFO* session_info,
   session_data->num_slots_private = private_slots;
   session_data->flags = flags;
 
-  const uint64_t systemlink_id = xe::byte_swap(XLiveAPI::systemlink_id);
+  const uint64_t systemlink_id = XLiveAPI::systemlink_id;
 
   if (IsSystemlink()) {
     XELOGI("Creating systemlink session");
@@ -214,15 +214,18 @@ X_RESULT XSession::JoinExistingSession(XSESSION_INFO* session_info) {
 }
 
 X_RESULT XSession::DeleteSession() {
-  state_ |= STATE_FLAGS_DELETED;
-
   // Begin XNetUnregisterKey?
+
+  state_ |= STATE_FLAGS_DELETED;
 
   if (IsHost() && IsXboxLive()) {
     XLiveAPI::DeleteSession(session_id_);
   }
 
-  // session_id_ = 0;
+  session_id_ = 0;
+
+  // Multiple sessions cause issues
+  // XLiveAPI::systemlink_id = session_id_;
 
   local_details_.eState = XSESSION_STATE::DELETED;
   // local_details_.sessionInfo.sessionID = XNKID{};
@@ -671,24 +674,33 @@ X_RESULT XSession::GetSessions(Memory* memory, XSessionSearch* search_data,
   if (!search_data->results_buffer_size) {
     search_data->results_buffer_size =
         sizeof(XSESSION_SEARCHRESULT) * search_data->num_results;
-    return ERROR_INSUFFICIENT_BUFFER;
+    return X_ONLINE_E_SESSION_INSUFFICIENT_BUFFER;
   }
 
   const auto sessions = XLiveAPI::SessionSearch(search_data, num_users);
 
-  const uint32_t session_count =
-      std::min<int32_t>(search_data->num_results, (uint32_t)sessions.size());
+  const uint32_t session_count = std::min<int32_t>(
+      search_data->num_results, static_cast<uint32_t>(sessions.size()));
+
+  const uint32_t session_ids =
+      memory->SystemHeapAlloc(session_count * sizeof(XNKID));
+
+  XNKID* session_ids_ptr = memory->TranslateVirtual<XNKID*>(session_ids);
+
+  for (uint32_t i = 0; i < session_count; i++) {
+    XNKID id = {};
+    Uint64toXNKID(sessions.at(i)->SessionID_UInt(), &id);
+
+    session_ids_ptr[i] = id;
+  }
+
+  GetSessionByIDs(memory, session_ids_ptr, session_count,
+                  search_data->search_results_ptr,
+                  search_data->results_buffer_size);
 
   SEARCH_RESULTS* search_results_ptr =
       memory->TranslateVirtual<SEARCH_RESULTS*>(
           search_data->search_results_ptr);
-
-  const uint32_t session_search_results_ptr =
-      memory->SystemHeapAlloc(search_data->results_buffer_size);
-
-  search_results_ptr->results_ptr =
-      memory->TranslateVirtual<XSESSION_SEARCHRESULT*>(
-          session_search_results_ptr);
 
   for (uint32_t i = 0; i < session_count; i++) {
     const auto context =
@@ -697,12 +709,7 @@ X_RESULT XSession::GetSessions(Memory* memory, XSessionSearch* search_data,
     FillSessionContext(memory, context, &search_results_ptr->results_ptr[i]);
     FillSessionProperties(search_data->num_props, search_data->props_ptr,
                           &search_results_ptr->results_ptr[i]);
-    FillSessionSearchResult(sessions.at(i),
-                            &search_results_ptr->results_ptr[i]);
   }
-
-  search_results_ptr->header.search_results_count = session_count;
-  search_results_ptr->header.search_results_ptr = session_search_results_ptr;
 
   return X_ERROR_SUCCESS;
 }
@@ -711,39 +718,90 @@ X_RESULT XSession::GetSessionByID(Memory* memory,
                                   XSessionSearchByID* search_data) {
   if (!search_data->results_buffer_size) {
     search_data->results_buffer_size = sizeof(XSESSION_SEARCHRESULT);
-    return ERROR_INSUFFICIENT_BUFFER;
+    return X_ONLINE_E_SESSION_INSUFFICIENT_BUFFER;
   }
 
-  const auto session_id = XNKIDtoUint64(&search_data->session_id);
-
-  if (!session_id) {
-    assert_always();
-    return X_ERROR_SUCCESS;
+  if (search_data->user_index < 0 ||
+      search_data->user_index >= X_USER_MAX_USERS) {
+    return X_ERROR_INVALID_PARAMETER;
   }
 
-  const auto session = XLiveAPI::XSessionGet(session_id);
   const uint32_t session_count = 1;
 
-  SEARCH_RESULTS* search_results_ptr =
-      memory->TranslateVirtual<SEARCH_RESULTS*>(
-          search_data->search_results_ptr);
+  GetSessionByIDs(memory, &search_data->session_id, session_count,
+                  search_data->search_results_ptr,
+                  search_data->results_buffer_size);
+
+  return X_ERROR_SUCCESS;
+}
+
+X_RESULT XSession::GetSessionByIDs(Memory* memory,
+                                   XSessionSearchByIDs* search_data) {
+  if (!search_data->results_buffer_size) {
+    search_data->results_buffer_size =
+        search_data->num_session_ids * sizeof(XSESSION_SEARCHRESULT);
+    return X_ONLINE_E_SESSION_INSUFFICIENT_BUFFER;
+  }
+
+  if (search_data->user_index < 0 ||
+      search_data->user_index >= X_USER_MAX_USERS) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+
+  if (search_data->num_session_ids <= 0 &&
+      search_data->num_session_ids > 0x64) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+
+  XNKID* session_ids_ptr =
+      memory->TranslateVirtual<XNKID*>(search_data->session_ids);
+
+  GetSessionByIDs(memory, session_ids_ptr, search_data->num_session_ids,
+                  search_data->search_results_ptr,
+                  search_data->results_buffer_size);
+
+  return X_ERROR_SUCCESS;
+}
+
+X_RESULT XSession::GetSessionByIDs(Memory* memory, XNKID* session_ids_ptr,
+                                   uint32_t num_session_ids,
+                                   uint32_t search_results_ptr,
+                                   uint32_t results_buffer_size) {
+  SEARCH_RESULTS* search_results =
+      memory->TranslateVirtual<SEARCH_RESULTS*>(search_results_ptr);
 
   const uint32_t session_search_result_ptr =
-      memory->SystemHeapAlloc(search_data->results_buffer_size);
+      memory->SystemHeapAlloc(results_buffer_size);
 
-  search_results_ptr->results_ptr =
+  search_results->results_ptr =
       memory->TranslateVirtual<XSESSION_SEARCHRESULT*>(
           session_search_result_ptr);
 
-  if (!session->HostAddress().empty()) {
-    // HUH? How it should be filled in this case?
-    FillSessionContext(memory, {}, &search_results_ptr->results_ptr[0]);
-    FillSessionProperties(0, 0, &search_results_ptr->results_ptr[0]);
-    FillSessionSearchResult(session, &search_results_ptr->results_ptr[0]);
+  uint32_t result_index = 0;
+
+  for (uint32_t i = 0; i < num_session_ids; i++) {
+    const xe::be<uint64_t> session_id = XNKIDtoUint64(&session_ids_ptr[i]);
+
+    if (!IsValidXNKID(session_id)) {
+      continue;
+    }
+
+    const auto session = XLiveAPI::XSessionGet(session_id);
+
+    if (!session->HostAddress().empty()) {
+      // HUH? How it should be filled in this case?
+      FillSessionContext(memory, {},
+                         &search_results->results_ptr[result_index]);
+      FillSessionProperties(0, 0, &search_results->results_ptr[result_index]);
+      FillSessionSearchResult(session,
+                              &search_results->results_ptr[result_index]);
+
+      result_index++;
+    }
   }
 
-  search_results_ptr->header.search_results_count = session_count;
-  search_results_ptr->header.search_results_ptr = session_search_result_ptr;
+  search_results->header.search_results_count = result_index;
+  search_results->header.search_results_ptr = session_search_result_ptr;
 
   return X_ERROR_SUCCESS;
 }
@@ -834,7 +892,7 @@ void XSession::PrintSessionDetails() {
       local_details_.MaxPrivateSlots, local_details_.MaxPublicSlots,
       local_details_.AvailablePrivateSlots, local_details_.AvailablePublicSlots,
       local_details_.ActualMemberCount, local_details_.ReturnedMemberCount,
-      local_details_.xnkidArbitration.as_uint64());
+      local_details_.xnkidArbitration.as_uintBE64());
 
   uint32_t index = 0;
 

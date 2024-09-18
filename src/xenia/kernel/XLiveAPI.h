@@ -33,21 +33,6 @@
 namespace xe {
 namespace kernel {
 
-struct XONLINE_SERVICE_INFO {
-  xe::be<uint32_t> id;
-  in_addr ip;
-  xe::be<uint16_t> port;
-  xe::be<uint16_t> reserved;
-};
-static_assert_size(XONLINE_SERVICE_INFO, 12);
-
-struct XTitleServer {
-  in_addr server_address;
-  uint32_t flags;
-  char server_description[200];
-};
-static_assert_size(XTitleServer, 208);
-
 class XLiveAPI {
  public:
   enum class InitState { Success, Failed, Pending };
@@ -133,9 +118,10 @@ class XLiveAPI {
 
   static std::unique_ptr<SessionObjectJSON> XSessionGet(uint64_t sessionId);
 
-  static std::vector<XTitleServer> GetServers();
+  static std::vector<X_TITLE_SERVER> GetServers();
 
-  static XONLINE_SERVICE_INFO GetServiceInfoById(uint32_t serviceId);
+  static HTTP_STATUS_CODE GetServiceInfoById(
+      uint32_t serviceId, X_ONLINE_SERVICE_INFO* session_info);
 
   static void SessionJoinRemote(
       uint64_t sessionId, const std::unordered_map<uint64_t, bool> members);
@@ -170,7 +156,7 @@ class XLiveAPI {
   inline static MacAddress* mac_address_ = nullptr;
 
   inline static bool xlsp_servers_cached = false;
-  inline static std::vector<XTitleServer> xlsp_servers{};
+  inline static std::vector<X_TITLE_SERVER> xlsp_servers{};
 
   inline static std::string interface_name;
 
@@ -178,11 +164,15 @@ class XLiveAPI {
 
   inline static std::vector<IP_ADAPTER_ADDRESSES> adapter_addresses{};
 
+  inline static bool adapter_has_wan_routing = false;
+
   inline static std::map<uint32_t, uint64_t> sessionIdCache{};
   inline static std::map<uint32_t, uint64_t> macAddressCache{};
   inline static std::map<uint64_t, std::vector<uint8_t>> qos_payload_cache{};
 
   inline static xe::be<uint64_t> systemlink_id = 0;
+
+  inline static bool xuid_mismatch = false;
 
   inline static int8_t version_status;
 
@@ -194,7 +184,8 @@ class XLiveAPI {
 
   inline static InitState initialized_ = InitState::Pending;
 
-  static std::unique_ptr<HTTPResponseObjectJSON> Get(std::string endpoint);
+  static std::unique_ptr<HTTPResponseObjectJSON> Get(
+      std::string endpoint, const uint32_t timeout = 0);
 
   static std::unique_ptr<HTTPResponseObjectJSON> Post(std::string endpoint,
                                                       const uint8_t* data,
