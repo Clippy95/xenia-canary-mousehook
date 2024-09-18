@@ -19,11 +19,13 @@ namespace winkey {
 
 class RedDeadRedemptionGame : public HookableGame {
  public:
-  enum class GameBuild {
+  enum /* class*/ GameBuild {
     Unknown,
     RedDeadRedemption_GOTY_Disk1,
     RedDeadRedemption_GOTY_Disk2,
-    RedDeadRedemption_Original_TU0
+    RedDeadRedemption_Original_TU0,
+    RedDeadRedemption_Original_TU9,
+    RedDeadRedemption_UndeadNightmare_Standalone_TU4
   };
 
   ~RedDeadRedemptionGame() override;
@@ -32,6 +34,13 @@ class RedDeadRedemptionGame : public HookableGame {
 
   float RadianstoDegree(float radians);
   float DegreetoRadians(float degree);
+  bool IsWeaponWheelShown();
+  bool IsCinematicTypeEnabled();
+  bool IsPaused();
+  void HandleRightStickEmulation(RawInputState& input_state,
+                                 X_INPUT_STATE* out_state);
+  float ClampVerticalAngle(float degree_y);
+  uint8_t GetCamType();
 
   bool DoHooks(uint32_t user_index, RawInputState& input_state,
                X_INPUT_STATE* out_state);

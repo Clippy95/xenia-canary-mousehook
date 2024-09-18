@@ -36,9 +36,10 @@ DEFINE_bool(swap_wheel, false,
             "will go to prev",
             "MouseHook");
 DEFINE_double(sensitivity, 1, "Mouse sensitivity", "MouseHook");
-DEFINE_double(fov_sensitivity, 0.9f,
-              "Mouse scale when FOV is lowered (Currently for COD)",
-              "MouseHook");
+DEFINE_double(
+    fov_sensitivity, 0.9f,
+    "Mouse scale when FOV is lowered (Currently for COD & Red Dead Redemption)",
+    "MouseHook");
 DEFINE_bool(disable_autoaim, true,
             "Disable autoaim in games that support it (currently GE,PD and SR)",
             "MouseHook");
@@ -69,6 +70,10 @@ DEFINE_int32(walk_diagonal, 18421,
              "Joystick movement for diagonal shiftwalking, default 18421 "
              "equates to 134.99 h.u./s",
              "MouseHook");
+DEFINE_bool(turbo_gallop_horse, false,
+            "Enables turbo galloping for horses and coaches in Red Dead "
+            "Redemption (Bound to Modifier same as Turbo sprint)",
+            "MouseHook");
 
 #define XE_HID_WINKEY_BINDING(button, description, cvar_name, \
                               cvar_default_value)             \
