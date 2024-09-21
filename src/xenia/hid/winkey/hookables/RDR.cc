@@ -95,7 +95,13 @@ struct GameBuildAddrs supported_builds[6] = {
      NULL,       0x82F7B450, 0xF3,       0x7049E69C}};
 
 RedDeadRedemptionGame::~RedDeadRedemptionGame() = default;
-
+uint32_t RedDeadRedemptionGame::cached_carriage_x_address = 0;
+uint32_t RedDeadRedemptionGame::cached_carriage_y_address = 0;
+uint32_t RedDeadRedemptionGame::cached_carriage_z_address = 0;
+uint32_t RedDeadRedemptionGame::cached_auto_center_strength_address_carriage =
+    0;
+static uint32_t cached_mounting_center_final = 0;
+static uint32_t cached_cover_center_final = 0;
 bool RedDeadRedemptionGame::IsGameSupported() {
   if (kernel_state()->title_id() != kTitleIdRedDeadRedemption) {
     return false;
@@ -166,6 +172,53 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
     return false;
   }
   if (IsCinematicTypeEnabled()) {
+    if (!IsPaused()) {
+      // Perform pattern scan to find carriage addresses if not already cached
+      if (cached_carriage_x_address == 0) {
+        // Perform pattern scan
+        uint32_t start_address = 0xBA000000;  // Adjust as necessary
+        uint32_t end_address = 0xBF000000;    // Adjust as necessary
+        uint8_t wildcard =
+            0xAB;  // Choose a wildcard that doesn't conflict with your pattern
+
+        std::vector<uint8_t> pattern = {0xCD, 0xCD, 0xCD, 0xCD, 0xCD, 0xCD,
+                                        0xCD, 0xCD, 0xBE, 0xCC, 0xCC, 0xCC,
+                                        0x00, 0x00, 0x03, 0xB0, 0xBE, 0xCC,
+                                        0xCC, 0xCC, 0x00, 0x00, 0x00, 0x50};
+
+        uint32_t pattern_address =
+            FindPatternWithWildcardAddress(start_address, end_address, pattern);
+
+        if (pattern_address != 0) {
+          // Calculate the base address for carriage x, y, z
+          uint32_t carriage_base_address = pattern_address - 0x77;
+
+          // Cache the addresses
+          cached_carriage_x_address = carriage_base_address;
+          cached_carriage_y_address = carriage_base_address + 0x04;
+          cached_carriage_z_address = carriage_base_address + 0x08;
+          cached_auto_center_strength_address_carriage =
+              carriage_base_address + 0x74;
+        }
+      }
+      if (cached_mounting_center_final == 0 || cached_cover_center_final == 0) {
+        // Pattern for 'shouldAutoAlignBehind'
+        std::vector<uint8_t> pattern = {
+            0x73, 0x68, 0x6F, 0x75, 0x6C, 0x64, 0x41, 0x75, 0x74, 0x6F, 0x41,
+            0x6C, 0x69, 0x67, 0x6E, 0x42, 0x65, 0x68, 0x69, 0x6E, 0x64};
+        uint32_t start_address = 0xBA000000;
+        uint32_t end_address = 0xBF000000;
+        uint32_t pattern_address =
+            FindPatternWithWildcardAddress(start_address, end_address, pattern);
+        if (pattern_address != 0) {
+          cached_mounting_center_final = pattern_address - 0x3F;
+          cached_cover_center_final = pattern_address - 0x99F;
+        }
+      }
+    }
+
+    static int32_t mouseisMoving = 0;
+    mouseisMoving = +input_state.mouse.y_delta + input_state.mouse.x_delta;
     // static uint32_t saved_fovscale_address = 0;
     float divisor;
     if (supported_builds[game_build_].fovscale_base_address != NULL) {
@@ -222,16 +275,30 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
         camY -=
             ((input_state.mouse.y_delta * (float)cvars::sensitivity) / divisor);
 
-        if (input_state.mouse.x_delta != 0 ||
-            input_state.mouse.y_delta != 0 &&
-                supported_builds[game_build_].mounting_center_address != NULL) {
+        if (supported_builds[game_build_].mounting_center_address != NULL) {
           xe::be<uint32_t>* cover_center_pointer =
               kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
                   supported_builds[game_build_].mounting_center_address);
           xe::be<uint32_t> cover_center_final = *cover_center_pointer + 0x15a0;
+          auto* cover_sanity =
+              kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+                  cover_center_final + 0x9A0);
+          static uint32_t shoul = 0x73686F75;
           auto* cover_center =
               kernel_memory()->TranslateVirtual<uint8_t*>(cover_center_final);
-          if (*cover_center != 0) *cover_center = 0;
+
+          if (*cover_center != 0 && mouseisMoving != 0 &&
+              *cover_sanity == shoul) {
+            *cover_center = 0;
+          } else if (cached_cover_center_final != 0) {
+            // Use cached address if sanity check fails
+            cover_center_final = cached_cover_center_final;
+            cover_center =
+                kernel_memory()->TranslateVirtual<uint8_t*>(cover_center_final);
+            if (*cover_center != 0 && mouseisMoving != 0) {
+              *cover_center = 0;
+            }
+          }
         }
 
         *radian_x_cover = camX;
@@ -279,6 +346,52 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
     xe::be<uint32_t> auto_center_strength_address =
         *base_address -
         supported_builds[game_build_].auto_center_strength_offset;
+
+    if (supported_builds[game_build_].cam_type_address != NULL) {
+      uint8_t cam_type = GetCamType();
+
+      if (cam_type &&
+          (cam_type == 10 || cam_type == 13)) {  // Carriage / mine cart
+        // Adjust addresses for carriage / mine cart
+        uint32_t carriage_x_address = x_address - 0x810;
+        uint32_t carriage_y_address = y_address - 0x810;
+        uint32_t carriage_z_address = z_address - 0x810;
+        uint32_t auto_center_strength_address_carriage =
+            carriage_x_address + 0x74;
+
+        // Perform sanity check
+        uint32_t check_address = carriage_x_address + 0x78;
+        xe::be<uint32_t>* check_value_ptr =
+            kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(check_address);
+
+        if (check_value_ptr && *check_value_ptr != 0xCDCDCDCD) {
+          // Sanity check failed, use cached addresses if available
+          if (cached_carriage_x_address != 0) {
+            carriage_x_address = cached_carriage_x_address;
+            carriage_y_address = cached_carriage_y_address;
+            carriage_z_address = cached_carriage_z_address;
+            auto_center_strength_address_carriage =
+                cached_auto_center_strength_address_carriage;
+          } else {
+            // Cached addresses not available, cannot proceed
+            return false;
+          }
+        } else {
+          // Sanity check passed, cache the addresses
+          cached_carriage_x_address = carriage_x_address;
+          cached_carriage_y_address = carriage_y_address;
+          cached_carriage_z_address = carriage_z_address;
+          cached_auto_center_strength_address_carriage =
+              auto_center_strength_address_carriage;
+        }
+
+        // Update x_address, y_address, z_address to the carriage addresses
+        x_address = carriage_x_address;
+        y_address = carriage_y_address;
+        z_address = carriage_z_address;
+        auto_center_strength_address = auto_center_strength_address_carriage;
+      }
+    }
 
     xe::be<float>* degree_x_act =
         kernel_memory()->TranslateVirtual<xe::be<float>*>(x_address);
@@ -403,16 +516,33 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
       }
       *auto_center_strength_act = auto_center_strength;
     }
-    if (supported_builds[game_build_].mounting_center_address != NULL &&
-        (input_state.mouse.x_delta != 0 || input_state.mouse.y_delta != 0)) {
+    if (supported_builds[game_build_].mounting_center_address != NULL) {
       xe::be<uint32_t>* mounting_center_pointer =
           kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
               supported_builds[game_build_].mounting_center_address);
       xe::be<uint32_t> mounting_center_final =
           *mounting_center_pointer + 0x1F00;
+
+      auto* mounting_sanity =
+          kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+              mounting_center_final + 0x40);
+      static uint32_t shoul = 0x73686F75;
       auto* mounting_center =
           kernel_memory()->TranslateVirtual<uint8_t*>(mounting_center_final);
-      if (*mounting_center != 0) *mounting_center = 0;
+
+      if (*mounting_center != 0 && *mounting_sanity == shoul &&
+          mouseisMoving != 0) {
+        *mounting_center = 0;
+      } else if (cached_mounting_center_final != 0) {
+        // Use cached address if sanity check fails
+        mounting_center_final = cached_mounting_center_final;
+        mounting_center =
+            kernel_memory()->TranslateVirtual<uint8_t*>(mounting_center_final);
+        if (*mounting_center != 0 && mouseisMoving != 0) {
+          *mounting_center = 0;
+        }
+      }
+      mouseisMoving = 0;
     }
   } else
     HandleRightStickEmulation(input_state, out_state);
@@ -516,21 +646,92 @@ float RedDeadRedemptionGame::ClampVerticalAngle(float degree_y) {
   return std::clamp(degree_y, min_y_angle, max_y_angle);
 }
 
-uint8_t RedDeadRedemptionGame::GetCamType() {
-  if (supported_builds[game_build_].cam_type_address != NULL) {
-    xe::be<uint32_t>* cam_type_result =
-        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-            supported_builds[game_build_].cam_type_address);
-    xe::be<uint32_t> cam_byte_read =
-        *cam_type_result + supported_builds[game_build_].cam_type_offset;
-    uint8_t* cam_type_ptr =
-        kernel_memory()->TranslateVirtual<uint8_t*>(cam_byte_read);
+static uint32_t cached_cam_type_address = 0;
 
+uint8_t RedDeadRedemptionGame::GetCamType() {
+  if (cached_cam_type_address != 0) {
+    uint8_t* cam_type_ptr =
+        kernel_memory()->TranslateVirtual<uint8_t*>(cached_cam_type_address);
     if (cam_type_ptr) {
-      return *cam_type_ptr;
+      return *cam_type_ptr;  // Return the cached camera type
+    }
+    return 0;
+  }
+
+  // Otherwise, we need to search for the pattern in memory
+  uint32_t start_address = 0xBA000A00;  // camera stuff start
+  uint32_t end_address = 0xBF000000;
+
+  // Pattern you are searching for with wildcards (assuming 0xCC is the
+  // wildcard)
+  std::vector<uint8_t> pattern = {
+      0xCC, 0xCC, 0xCC, 0xCC,  // Wildcards for the actual address
+      0x00, 0x0F, 0x00, 0x10,  // Specific bytes in the pattern
+      0x00, 0x00, 0x3F, 0xFF, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00};
+
+  // Find the pattern in console memory (one-time scan)
+  cached_cam_type_address =
+      FindPatternWithWildcardAddress(start_address, end_address, pattern);
+
+  // If we found the address, translate it and return the camera type
+  if (cached_cam_type_address != 0) {
+    uint8_t* cam_type_ptr =
+        kernel_memory()->TranslateVirtual<uint8_t*>(cached_cam_type_address);
+    if (cam_type_ptr) {
+      return *cam_type_ptr;  // Return the camera type from the found address
     }
   }
-  return 0;  // 0 is on foot mostly with cam_type
+
+  return 0;  // Default to 0 if no pattern was found or the cam_type_ptr is
+             // invalid
+}
+
+uint32_t RedDeadRedemptionGame::FindPatternWithWildcardAddress(
+    uint32_t start_address, uint32_t end_address,
+    const std::vector<uint8_t>& pattern) {
+  // Translate the start and end addresses
+  auto* memory_base =
+      kernel_memory()->TranslateVirtual<uint8_t*>(start_address);
+  auto* memory_end = kernel_memory()->TranslateVirtual<uint8_t*>(end_address);
+
+  size_t pattern_length = pattern.size();
+
+  for (auto* current_address = memory_base; current_address < memory_end;
+       current_address++) {
+    // Debug: Print current memory address being checked
+    // printf("Checking memory at address: %p\n", current_address);
+
+    // Compare the memory with the pattern
+    if (CompareMemoryWithPattern(current_address, pattern)) {
+      // Compute the guest virtual address (ensure 32-bit format)
+      uint32_t guest_virtual_address =
+          start_address + (uint32_t)(current_address - memory_base);
+
+      // Debug: Print the address in 0x format
+      printf("Pattern found at address: 0x%08X\n", guest_virtual_address - 0x1);
+
+      // Return the 32-bit guest virtual address
+      return guest_virtual_address - 0x1;
+    }
+  }
+
+  return 0;
+}
+bool RedDeadRedemptionGame::CompareMemoryWithPattern(
+    const uint8_t* memory, const std::vector<uint8_t>& pattern) {
+  for (size_t i = 0; i < pattern.size(); i++) {
+    // If the pattern byte is 0xCC (wildcard), we skip checking
+    if (pattern[i] == 0xCC) {
+      continue;  // 0xCC acts as a wildcard and matches anything
+    }
+    // Compare the memory byte with the pattern byte
+    // printf("Comparing memory[%zu] = %02X with pattern[%zu] = %02X\n", i,
+    //    memory[i], i, pattern[i]);
+    if (memory[i] != pattern[i]) {
+      return false;  // Mismatch, so the pattern does not match here
+    }
+  }
+  return true;  // Pattern matches
 }
 
 std::string RedDeadRedemptionGame::ChooseBinds() { return "Default"; }
