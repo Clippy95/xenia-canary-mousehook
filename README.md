@@ -59,6 +59,7 @@ This is a fork of [emoose's Xenia build](https://github.com/emoose/xenia) as ori
 | Gears Of Wars 2 | TU0/TU6 |
 | Gears Of Wars 3 | TU0/TU6 |
 | Gears Of Wars Judgement | TU0/TU4|
+| Red Dead Redemption | Original TU0/TU9, Undead Nightmare (Platinum Hits) TU4 & Game Of The Year Edition Disk 1/2 TU0|
 
 ---
 
