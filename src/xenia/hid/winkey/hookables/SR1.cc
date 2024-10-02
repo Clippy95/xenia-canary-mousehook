@@ -40,12 +40,15 @@ struct GameBuildAddrs {
   uint32_t vehicle_address;
   uint32_t weapon_wheel_address;
   uint32_t menu_status_address;
+  uint32_t currentFPS_address;
+  uint32_t havok_frametime_address;
 };
 
 std::map<SaintsRow1Game::GameBuild, GameBuildAddrs> supported_builds{
     {SaintsRow1Game::GameBuild::Unknown, {" ", NULL, NULL}},
     {SaintsRow1Game::GameBuild::SaintsRow1_TU1,
-     {"1.0.1", 0x827f9af8, 0x827F9B00, 0x827F9A6A, 0x8283CA7B, 0x835F27A3}}};
+     {"1.0.1", 0x827f9af8, 0x827F9B00, 0x827F9A6A, 0x8283CA7B, 0x835F27A3,
+      0x827CA750, 0x835F2684}}};
 
 SaintsRow1Game::~SaintsRow1Game() = default;
 
@@ -84,9 +87,13 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (supported_builds.count(game_build_) == 0) {
     return false;
   }
+  xe::be<float>* currentFPS = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[game_build_].currentFPS_address);
+  xe::be<float>* frametime = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[game_build_].havok_frametime_address);
+  float correctFrametime = 1 / *currentFPS;
 
-
-  //*frametime = correctFrametime * 2;
+  *frametime = correctFrametime * 2;
 
 
   auto now = std::chrono::steady_clock::now();
@@ -159,16 +166,16 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
 
   // X-axis = 0 to 360
   if (!cvars::invert_x) {
-    degree_x = (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
+    degree_x += (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
   } else {
-    degree_x = (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
+    degree_x -= (input_state.mouse.x_delta / 5.f) * (float)cvars::sensitivity;
   }
 
   *addition_x = degree_x;
 
 
   if (!cvars::invert_y) {
-    degree_y -= (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
+    degree_y += (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
   } else {
     degree_y -= (input_state.mouse.y_delta / 5.f) * (float)cvars::sensitivity;
   }
