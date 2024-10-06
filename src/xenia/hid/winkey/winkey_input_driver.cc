@@ -20,10 +20,10 @@
 
 #include "xenia/hid/winkey/hookables/CallOfDuty.h"
 #include "xenia/hid/winkey/hookables/Crackdown2.h"
-#include "xenia/hid/winkey/hookables/JustCause.h"
 #include "xenia/hid/winkey/hookables/DeadRising.h"
 #include "xenia/hid/winkey/hookables/Farcry.h"
 #include "xenia/hid/winkey/hookables/GearsOfWars.h"
+#include "xenia/hid/winkey/hookables/JustCause.h"
 #include "xenia/hid/winkey/hookables/RDR.h"
 #include "xenia/hid/winkey/hookables/SaintsRow.h"
 #include "xenia/hid/winkey/hookables/SourceEngine.h"
