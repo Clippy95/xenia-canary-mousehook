@@ -20,6 +20,7 @@
 
 #include "xenia/hid/winkey/hookables/CallOfDuty.h"
 #include "xenia/hid/winkey/hookables/Crackdown2.h"
+#include "xenia/hid/winkey/hookables/JustCause.h"
 #include "xenia/hid/winkey/hookables/DeadRising.h"
 #include "xenia/hid/winkey/hookables/Farcry.h"
 #include "xenia/hid/winkey/hookables/GearsOfWars.h"
@@ -431,6 +432,7 @@ WinKeyInputDriver::WinKeyInputDriver(xe::ui::Window* window,
   hookable_games_.push_back(std::move(std::make_unique<SourceEngine>()));
   hookable_games_.push_back(std::move(std::make_unique<Crackdown2Game>()));
   hookable_games_.push_back(std::move(std::make_unique<SaintsRowGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<JustCauseGame>()));
   hookable_games_.push_back(std::move(std::make_unique<FarCryGame>()));
   hookable_games_.push_back(std::move(std::make_unique<DeadRisingGame>()));
   hookable_games_.push_back(std::move(std::make_unique<GearsOfWarsGame>()));
