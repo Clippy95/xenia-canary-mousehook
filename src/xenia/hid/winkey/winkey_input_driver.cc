@@ -37,10 +37,10 @@ DEFINE_bool(swap_wheel, false,
             "will go to prev",
             "MouseHook");
 DEFINE_double(sensitivity, 1, "Mouse sensitivity", "MouseHook");
-DEFINE_double(
-    fov_sensitivity, 0.9,
-    "Mouse scale when FOV is lowered (Currently for COD, Red Dead Redemption, Unreal Engine 3 & Dead Rising)",
-    "MouseHook");
+DEFINE_double(fov_sensitivity, 0.9,
+              "Mouse scale when FOV is lowered (Currently for COD, Red Dead "
+              "Redemption, Unreal Engine 3 & Dead Rising)",
+              "MouseHook");
 DEFINE_bool(disable_autoaim, true,
             "Disable autoaim in games that support it (currently GE,PD and SR)",
             "MouseHook");
