@@ -20,19 +20,16 @@ namespace winkey {
 class GearsOfWarsGame : public HookableGame {
  public:
   enum class GameBuild {
-    Unknown,
+    Unknown = 0,
     GearsOfWars2_TU6,
-    GearsOfWars2_TU6_XBL,
-    GearsOfWars2_TU0_XBL,
     GearsOfWars2_TU0,
     GearsOfWars1_TU0,
     GearsOfWars1_TU5,
     GearsOfWars3_TU0,
     GearsOfWars3_TU6,
-    GearsOfWars3_TU0_XBL,
-    GearsOfWars3_TU6_XBL,
     GearsOfWarsJudgment_TU0,
-    GearsOfWarsJudgment_TU4
+    GearsOfWarsJudgment_TU4,
+    Section8_TU0
   };
 
   ~GearsOfWarsGame() override;
@@ -41,6 +38,13 @@ class GearsOfWarsGame : public HookableGame {
 
   bool DoHooks(uint32_t user_index, RawInputState& input_state,
                X_INPUT_STATE* out_state);
+
+  float FOVScale();
+
+  void ClampYAxis(uint16_t& value, uint16_t max_down, uint16_t max_up);
+
+  uint32_t ResolveMultiPointer(uint32_t base_address,
+                               const std::vector<uint32_t>& offsets);
 
   std::string ChooseBinds();
 

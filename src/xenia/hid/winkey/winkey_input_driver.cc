@@ -39,7 +39,7 @@ DEFINE_bool(swap_wheel, false,
 DEFINE_double(sensitivity, 1, "Mouse sensitivity", "MouseHook");
 DEFINE_double(
     fov_sensitivity, 0.9,
-    "Mouse scale when FOV is lowered (Currently for COD & Red Dead Redemption)",
+    "Mouse scale when FOV is lowered (Currently for COD,Red Dead Redemption & Unreal Engine 3 Games)",
     "MouseHook");
 DEFINE_bool(disable_autoaim, true,
             "Disable autoaim in games that support it (currently GE,PD and SR)",
@@ -51,7 +51,14 @@ DEFINE_double(right_stick_hold_time_workaround, 33,
               "is detected. (Currently Saints Row 2 & Gears Of Wars series)",
               "MouseHook");
 
-DEFINE_bool(use_right_stick_workaround_gears1and2, false,
+DEFINE_int32(
+    ue3_use_timer_to_hook_workaround, 0,
+    "(in non-decimal seconds) Wait a set of amount of time before hooking into "
+    "Unreal Engine 3, do not change this unless UE3 games crash. 0 is disabled "
+    "and relies on when intro finishes loading.",
+    "MouseHook");
+
+DEFINE_bool(use_right_stick_workaround_gears1and2, true,
             "(Gears) Enables the use of the RS workaround for Gears 1 and 2. "
             "Recommended for Gears 3 & Judgement.",
             "MouseHook");
