@@ -26,7 +26,10 @@
 #include "xenia/xbox.h"
 
 #include "xenia/app/profile_dialogs.h"
-
+namespace cvars {
+extern double sensitivity;
+extern double fov_sensitivity;
+}  // namespace cvars
 namespace xe {
 namespace app {
 
@@ -173,6 +176,47 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
+  class MousehookConfigDialog final : public ui::ImGuiDialog {
+   public:
+    MousehookConfigDialog(ui::ImGuiDrawer* imgui_drawer,
+                          EmulatorWindow& emulator_window)
+        : ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {}
+
+   protected:
+    void OnDraw(ImGuiIO& io) override {
+      bool dialog_open = true;
+      if (!ImGui::Begin("Mousehook Config", &dialog_open,
+                        ImGuiWindowFlags_NoCollapse |
+                            ImGuiWindowFlags_AlwaysAutoResize |
+                            ImGuiWindowFlags_HorizontalScrollbar)) {
+        ImGui::End();
+        return;
+      }
+
+      // Adjust sensitivity
+      double sensitivity = cvars::sensitivity;
+      float sensitivity_float = static_cast<float>(sensitivity);
+      ImGui::SliderFloat("Sensitivity", &sensitivity_float, 0.1f, 5.0f, "%.2f");
+      cvars::sensitivity = static_cast<double>(sensitivity_float);
+
+      // Adjust fov_sensitivity
+      double fov_sensitivity = cvars::fov_sensitivity;
+      float fov_sensitivity_float = static_cast<float>(fov_sensitivity);
+      ImGui::SliderFloat("FOV Sensitivity", &fov_sensitivity_float, 0.1f, 5.0f,
+                         "%.2f");
+      cvars::fov_sensitivity = static_cast<double>(fov_sensitivity_float);
+
+      // Close button handling
+      if (!dialog_open) {
+        emulator_window_.ToggleMousehookConfigDialog();
+      }
+      ImGui::End();
+    }
+
+   private:
+    EmulatorWindow& emulator_window_;
+  };
+
   class DisplayConfigDialog final : public ui::ImGuiDialog {
    public:
     DisplayConfigDialog(ui::ImGuiDrawer* imgui_drawer,
@@ -211,6 +255,7 @@ class EmulatorWindow {
   void OnKeyDown(ui::KeyEvent& e);
   void OnMouseDown(const ui::MouseEvent& e);
   void ToggleFullscreenOnDoubleClick();
+  void ToggleMousehookConfigDialog();
   void FileDrop(const std::filesystem::path& filename);
   void OnMouseUp(const ui::MouseEvent& e);
   void FileOpen();
@@ -256,6 +301,7 @@ class EmulatorWindow {
   std::unique_ptr<ui::ImGuiDrawer> imgui_drawer_;
   std::unique_ptr<DisplayConfigGameConfigLoadCallback>
       display_config_game_config_load_callback_;
+  std::unique_ptr<MousehookConfigDialog> mousehook_config_dialog_;
   // Creation may fail, in this case immediate drawer UI must not be drawn.
   std::unique_ptr<ui::ImmediateDrawer> immediate_drawer_;
 

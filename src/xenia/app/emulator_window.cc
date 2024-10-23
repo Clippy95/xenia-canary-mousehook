@@ -62,6 +62,10 @@ DECLARE_bool(clear_memory_page_state);
 
 DECLARE_bool(d3d12_readback_resolve);
 
+DECLARE_double(fov_sensitivity);
+
+DECLARE_double(sensitivity);
+
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
 
@@ -696,6 +700,10 @@ bool EmulatorWindow::Initialize() {
     hid_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "&Display controller hotkeys", "",
         std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
+
+    hid_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Mousehook Config", "F7",
+        std::bind(&EmulatorWindow::ToggleMousehookConfigDialog, this)));
   }
   main_menu->AddChild(std::move(hid_menu));
 
@@ -1399,6 +1407,19 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
         new DisplayConfigDialog(imgui_drawer_.get(), *this));
   } else {
     display_config_dialog_.reset();
+  }
+}
+
+void EmulatorWindow::ToggleMousehookConfigDialog() {
+  if (!mousehook_config_dialog_) {
+    mousehook_config_dialog_ =
+        std::make_unique<MousehookConfigDialog>(imgui_drawer_.get(), *this);
+  } else {
+    mousehook_config_dialog_.reset();
+  }
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+      !ImGui::IsAnyItemActive() && !ImGui::IsMouseClicked(0)) {
+    ImGui::SetKeyboardFocusHere(0);
   }
 }
 
