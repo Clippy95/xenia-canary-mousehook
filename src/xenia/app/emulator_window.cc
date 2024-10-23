@@ -873,6 +873,9 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
     case ui::VirtualKey::kF6: {
       ToggleDisplayConfigDialog();
     } break;
+    case ui::VirtualKey::kF7: {
+      ToggleMousehookConfigDialog();
+    } break;
     case ui::VirtualKey::kF11: {
       ToggleFullscreen();
     } break;
@@ -1414,12 +1417,10 @@ void EmulatorWindow::ToggleMousehookConfigDialog() {
   if (!mousehook_config_dialog_) {
     mousehook_config_dialog_ =
         std::make_unique<MousehookConfigDialog>(imgui_drawer_.get(), *this);
+    kernel::xam::xam_dialogs_shown_++;
   } else {
     mousehook_config_dialog_.reset();
-  }
-  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-      !ImGui::IsAnyItemActive() && !ImGui::IsMouseClicked(0)) {
-    ImGui::SetKeyboardFocusHere(0);
+    kernel::xam::xam_dialogs_shown_--;
   }
 }
 
