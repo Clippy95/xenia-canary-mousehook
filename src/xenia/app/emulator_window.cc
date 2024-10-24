@@ -141,6 +141,11 @@ DEFINE_double(
     fov_sensitivity, 0.9,
     "Mouse scale when FOV is lowered (Currently for COD, DR, RDR & UE3 Games)",
     "MouseHook");
+DEFINE_double(
+    ge_aim_turn_distance, 0.4f,
+    "(GoldenEye/Perfect Dark) Distance crosshair can move in aim-mode before "
+    "turning the camera [range 0 - 1]",
+    "MouseHook");
 // Dithering to 8bpc is enabled by default since the effect is minor, only
 // effects what can't be shown normally by host displays, and nothing is changed
 // by it for 8bpc source without resampling.
@@ -1428,12 +1433,16 @@ void EmulatorWindow::ToggleMousehookConfigDialog() {
     mousehook_config_dialog_ =
         std::make_unique<MousehookConfigDialog>(imgui_drawer_.get(), *this);
     kernel::xam::xam_dialogs_shown_++;
+    window_->SetCursorVisibility(ui::Window::CursorVisibility::kVisible);
   } else {
     mousehook_config_dialog_.reset();
     kernel::xam::xam_dialogs_shown_--;
     // Save when menu closes
     OVERRIDE_double(sensitivity, cvars::sensitivity);
     OVERRIDE_double(fov_sensitivity, cvars::fov_sensitivity);
+    OVERRIDE_double(ge_aim_turn_distance, cvars::ge_aim_turn_distance);
+    if (window_->IsFullscreen())
+      window_->SetCursorVisibility(ui::Window::CursorVisibility::kHidden);
   }
 }
 
