@@ -62,9 +62,9 @@ DECLARE_bool(clear_memory_page_state);
 
 DECLARE_bool(d3d12_readback_resolve);
 
-DECLARE_double(fov_sensitivity);
+// DECLARE_double(fov_sensitivity);
 
-DECLARE_double(sensitivity);
+// DECLARE_double(sensitivity);
 
 DEFINE_bool(fullscreen, false, "Whether to launch the emulator in fullscreen.",
             "Display");
@@ -136,6 +136,11 @@ DEFINE_double(
     "stops.\n"
     "Lower is sharper.",
     "Display");
+DEFINE_double(sensitivity, 1, "Mouse sensitivity", "MouseHook");
+DEFINE_double(
+    fov_sensitivity, 0.9,
+    "Mouse scale when FOV is lowered (Currently for COD, DR, RDR & UE3 Games)",
+    "MouseHook");
 // Dithering to 8bpc is enabled by default since the effect is minor, only
 // effects what can't be shown normally by host displays, and nothing is changed
 // by it for 8bpc source without resampling.
@@ -700,12 +705,17 @@ bool EmulatorWindow::Initialize() {
     hid_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "&Display controller hotkeys", "",
         std::bind(&EmulatorWindow::DisplayHotKeysConfig, this)));
+  }
+  main_menu->AddChild(std::move(hid_menu));
 
-    hid_menu->AddChild(MenuItem::Create(
+  // Mousehook menu.
+  auto mousehook_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Mousehook");
+  {
+    mousehook_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "&Mousehook Config", "F7",
         std::bind(&EmulatorWindow::ToggleMousehookConfigDialog, this)));
   }
-  main_menu->AddChild(std::move(hid_menu));
+  main_menu->AddChild(std::move(mousehook_menu));
 
   // Help menu.
   auto help_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Help");
@@ -1421,6 +1431,9 @@ void EmulatorWindow::ToggleMousehookConfigDialog() {
   } else {
     mousehook_config_dialog_.reset();
     kernel::xam::xam_dialogs_shown_--;
+    // Save when menu closes
+    OVERRIDE_double(sensitivity, cvars::sensitivity);
+    OVERRIDE_double(fov_sensitivity, cvars::fov_sensitivity);
   }
 }
 
