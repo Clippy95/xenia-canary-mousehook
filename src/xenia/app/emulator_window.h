@@ -207,7 +207,7 @@ class EmulatorWindow {
       ImGui::SliderFloat("FOV Sensitivity", &fov_sensitivity_float, 0.1f, 5.0f,
                          "%.2f");
       ImGui::TextUnformatted(
-          "Mouse scale when FOV is lowered (Currently for COD, Dead Rising, "
+          "(Currently only applied for COD, Dead Rising, "
           "Red Dead Redemption & Unreal Engine 3 "
           "Games)");
       cvars::fov_sensitivity = static_cast<double>(fov_sensitivity_float);
@@ -215,13 +215,17 @@ class EmulatorWindow {
       double ge_aim_turn_distance = cvars::ge_aim_turn_distance;
       float ge_aim_turn_distance_float =
           static_cast<float>(ge_aim_turn_distance);
-      ImGui::SliderFloat("ge_aim_turn_distance", &ge_aim_turn_distance_float,
-                         0.1f, 1.0f, "%.2f");
-      ImGui::TextUnformatted(
-          "(GoldenEye/Perfect Dark) Distance crosshair can move in aim-mode "
-          "before turning the camera.");
-      cvars::ge_aim_turn_distance =
-          static_cast<double>(ge_aim_turn_distance_float);
+      if (ImGui::TreeNodeEx("Goldeneye", ImGuiTreeNodeFlags_Framed |
+                                             ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("ge_aim_turn_distance", &ge_aim_turn_distance_float,
+                           0.1f, 1.0f, "%.2f");
+        ImGui::TextUnformatted(
+            "(GoldenEye/Perfect Dark) Distance crosshair can move in aim-mode "
+            "before turning the camera.");
+        cvars::ge_aim_turn_distance =
+            static_cast<double>(ge_aim_turn_distance_float);
+      }
+      ImGui::TreePop();
       // Close button handling
       if (!dialog_open) {
         emulator_window_.ToggleMousehookConfigDialog();
