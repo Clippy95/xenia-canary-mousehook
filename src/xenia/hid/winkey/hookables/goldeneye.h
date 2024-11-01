@@ -41,6 +41,8 @@ class GoldeneyeGame : public HookableGame {
   bool ModifierKeyHandler(uint32_t user_index, RawInputState& input_state,
                           X_INPUT_STATE* out_state);
 
+  bool isBetween(float value, float min, float max);
+
  private:
   GameBuild game_build_ = GameBuild::Unknown;
 
@@ -50,6 +52,7 @@ class GoldeneyeGame : public HookableGame {
 
   float centering_speed_ = 0.0125f;
   bool start_centering_ = false;
+  bool within_gun_range = false;
   bool disable_sway_ = false;  // temporarily prevents sway being applied
 };
 

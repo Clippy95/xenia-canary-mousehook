@@ -70,14 +70,16 @@ struct RareGameBuildAddrs {
   uint32_t player_offset_aim_multiplier;
   uint32_t player_offset_gun_left_x;
   uint32_t player_offset_gun_left_y;
+  uint32_t sway_crosshair_address;
 };
 
 std::map<GoldeneyeGame::GameBuild, RareGameBuildAddrs> supported_builds = {
     // GoldenEye Nov2007 build (aka Aug2007 build)
     {GoldeneyeGame::GameBuild::GoldenEye_Nov2007_Release,
-     {0x8200336C, 0x676f6c64, 0x8272B37C, 0x82F1E70C, 0x83088228, 0x298,
-      0x82F1FA98, 0x2E8, 0x80, 0x254, 0x264, 0x10A8, 0x10AC, 0x10BC, 0x10C0,
-      0x22C, 0x11AC}},
+     {0x8200336C, 0x676f6c64, 0x8272B37C, 0x82F1E70C, 0x83088228,
+      0x298,      0x82F1FA98, 0x2E8,      0x80,       0x254,
+      0x264,      0x10A8,     0x10AC,     0x10BC,     0x10C0,
+      0x22C,      0x11AC,     NULL,       NULL,       0x82f1e708}},
     {GoldeneyeGame::GameBuild::GoldenEye_Nov2007_Team,
      {0x82003398, 0x676f6c64, 0x827DB384, 0x82FCE6CC, 0x831382D0, 0x2A0,
       0x82FCFA98, 0x2E8, 0x80, 0x254, 0x264, 0x10A8, 0x10AC, 0x10BC, 0x10C0,
@@ -183,6 +185,11 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     game_pause_flag = *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
         game_addrs.game_pause_addr);
   }
+
+  xe::be<uint32_t>* engine_sway_flag =
+      kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+          game_addrs.sway_crosshair_address);
+  uint32_t engine_flag_le = *engine_sway_flag;
 
   // First check if control-disabled flag is set (eg. we're in a cutscene)
   uint32_t game_control_disabled = 0;
@@ -312,17 +319,15 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (player_aim_mode != prev_aim_mode_) {
     if (player_aim_mode != 0) {
       // Entering aim mode, reset gun position
-      *player_gun_x = 0;
-      *player_gun_y = 0;
+      if (engine_flag_le != 0) *engine_sway_flag = 0;
       if (title_id == kTitleIdPerfectDark) {
         *player_gun_left_x = 0;
         *player_gun_left_y = 0;
       }
+    } else if (player_aim_mode == 0) {
+      if (engine_flag_le != 1) *engine_sway_flag = 1;
     }
-    // Always reset crosshair after entering/exiting aim mode
-    // Otherwise non-aim-mode will still fire toward it...
-    *player_crosshair_x = 0;
-    *player_crosshair_y = 0;
+
     prev_aim_mode_ = player_aim_mode;
   }
 
@@ -332,6 +337,8 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   float gun_multiplier = 1;
   float crosshair_multiplier = 1;
   float centering_multiplier = 1;
+  float minVal = -0.30f;
+  float maxVal = 0.30f;
 
   float aim_turn_distance = (float)cvars::ge_aim_turn_distance;
   float aim_turn_dividor = 1.f;
@@ -353,7 +360,7 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (player_aim_mode == 1) {
     float chX = *player_crosshair_x;
     float chY = *player_crosshair_y;
-
+    if (engine_flag_le != 0) *engine_sway_flag = 0;
     if (!cvars::invert_x) {
       chX += (((float)input_state.mouse.x_delta) / dividor) *
              (float)cvars::sensitivity;
@@ -380,6 +387,11 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     *player_crosshair_y = chY;
     *player_gun_x = (chX * gun_multiplier);
     *player_gun_y = (chY * gun_multiplier);
+    if (!isBetween((*player_gun_x), minVal, maxVal)) {
+      within_gun_range = false;
+      disable_sway_ = true;
+    } else
+      within_gun_range = true;
     if (title_id == kTitleIdPerfectDark) {
       *player_gun_left_x = (chX * gun_multiplier);
       *player_gun_left_y = (chY * gun_multiplier);
@@ -414,7 +426,7 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     }
 
     start_centering_ = true;
-    disable_sway_ = true;      // skip weapon sway until we've centered
+    // disable_sway_ = true;      // skip weapon sway until we've centered
     centering_speed_ = 0.05f;  // speed up centering from aim-mode
   } else {
     float gX = *player_gun_x;
@@ -423,26 +435,23 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     // Apply gun-centering
     if (start_centering_) {
       if (gX != 0 || gY != 0) {
-        if (gX > 0) {
-          gX -= std::min((centering_speed_ * centering_multiplier), gX);
-        }
-        if (gX < 0) {
-          gX += std::min((centering_speed_ * centering_multiplier), -gX);
-        }
-        if (gY > 0) {
-          gY -= std::min((centering_speed_ * centering_multiplier), gY);
-        }
-        if (gY < 0) {
-          gY += std::min((centering_speed_ * centering_multiplier), -gY);
-        }
+        if (engine_flag_le != 1) *engine_sway_flag = 1;
       }
       if (gX == 0 && gY == 0) {
         centering_speed_ = 0.0125f;
         start_centering_ = false;
-        disable_sway_ = false;
+        // disable_sway_ = false;
       }
     }
-
+    if (within_gun_range == false) {
+      if (isBetween(*player_gun_x, minVal, maxVal)) {
+        within_gun_range = true;
+        disable_sway_ = false;
+      } else {
+        disable_sway_ = true;
+        within_gun_range = false;
+      }
+    }
     // Camera hax
     if (input_state.mouse.x_delta || input_state.mouse.y_delta) {
       float camX = *player_cam_x;
@@ -455,12 +464,19 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
         camX -= (((float)input_state.mouse.x_delta) / 10.f) *
                 (float)cvars::sensitivity;
       }
-
+      /*if (false) {
+        gX =+ ((((float)input_state.mouse.x_delta) / 16000.f) *
+                            (float)cvars::sensitivity) *
+                           bounds;
+        gY =+ ((((float)input_state.mouse.y_delta) / 16000.f) *
+                            (float)cvars::sensitivity) *
+                           bounds;
+      }*/
       // Add 'sway' to gun
-      float gun_sway_x = ((((float)input_state.mouse.x_delta) / 16000.f) *
+      float gun_sway_x = ((((float)input_state.mouse.x_delta) / 2500.f) *
                           (float)cvars::sensitivity) *
                          bounds;
-      float gun_sway_y = ((((float)input_state.mouse.y_delta) / 16000.f) *
+      float gun_sway_y = ((((float)input_state.mouse.y_delta) / 2500.f) *
                           (float)cvars::sensitivity) *
                          bounds;
 
@@ -482,16 +498,16 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
       if (cvars::ge_gun_sway && !disable_sway_) {
         // Bound the 'sway' movement to [0.2:-0.2] to make it look a bit
         // better (but only if the sway would make it go further OOB)
-        if (gun_sway_x_changed > (0.2f * bounds) && gun_sway_x > 0) {
+        if (gun_sway_x_changed > (0.5f * bounds) && gun_sway_x > 0) {
           gun_sway_x_changed = gX;
         }
-        if (gun_sway_x_changed < -(0.2f * bounds) && gun_sway_x < 0) {
+        if (gun_sway_x_changed < -(0.5f * bounds) && gun_sway_x < 0) {
           gun_sway_x_changed = gX;
         }
-        if (gun_sway_y_changed > (0.2f * bounds) && gun_sway_y > 0) {
+        if (gun_sway_y_changed > (0.5f * bounds) && gun_sway_y > 0) {
           gun_sway_y_changed = gY;
         }
-        if (gun_sway_y_changed < -(0.2f * bounds) && gun_sway_y < 0) {
+        if (gun_sway_y_changed < -(0.5f * bounds) && gun_sway_y < 0) {
           gun_sway_y_changed = gY;
         }
 
@@ -501,7 +517,7 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     } else {
       if (!start_centering_) {
         start_centering_ = true;
-        centering_speed_ = 0.0125f;
+        centering_speed_ = 5000.f;
       }
     }
 
@@ -510,8 +526,16 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
     gY = std::min(gY, bounds);
     gY = std::max(gY, -bounds);
 
+    crosshair_multiplier = 1.05f;
+
     *player_crosshair_x = (gX * crosshair_multiplier);
     *player_crosshair_y = (gY * crosshair_multiplier);
+
+    if (gX >= maxVal)
+      gX = maxVal;
+    else if (gX <= minVal)
+      gX = minVal;
+
     *player_gun_x = gX;
     *player_gun_y = gY;
 
@@ -575,7 +599,9 @@ bool GoldeneyeGame::ModifierKeyHandler(uint32_t user_index,
   // won't be used
   return true;
 }
-
+bool GoldeneyeGame::isBetween(float value, float min, float max) {
+  return value >= min && value <= max;
+}
 }  // namespace winkey
 }  // namespace hid
 }  // namespace xe

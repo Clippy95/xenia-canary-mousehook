@@ -1603,7 +1603,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       if (*test_addr != build.check_value) {
         continue;
       }
-
+      /*
       // Prevent game from overwriting crosshair/gun positions
       if (build.crosshair_addr1) {
         patch_addr(build.crosshair_addr1, build.crosshair_patch1);
@@ -1611,7 +1611,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       if (build.crosshair_addr2) {
         patch_addr(build.crosshair_addr2, build.crosshair_patch2);
       }
-
+      */
       // Hide "return to arcade" menu option
       if (build.returnarcade_addr1) {
         patch_addr(build.returnarcade_addr1, build.returnarcade_patch1);
