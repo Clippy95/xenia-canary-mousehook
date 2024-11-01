@@ -92,6 +92,12 @@ DEFINE_bool(sr2_better_handbrake_cam, true,
             "handbraking akin to SR1.",
             "MouseHook");
 
+DEFINE_bool(sr_havok_fix_frametime, true,
+            "(Saints Row 1&2) Fixes cutscene object synchronization and doors "
+            "teleporting on high fps, as seen in Juiced Patch. (Causes "
+            "Performance loss at a higher FPSes.) ",
+            "MouseHook");
+
 DEFINE_bool(allow_game_relative_writes, false,
             "Not useful to non-developers. Allows code to write to paths "
             "relative to game://. Used for "
@@ -1489,6 +1495,47 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       if (cvars::ge_debug_menu && build.debug_addr) {
         // Enable debug menu
         patch_addr(build.debug_addr, 0x2B0B0000);
+      }
+
+      break;
+    }
+  }
+
+  if (module->title_id() == 0x545107D1) {
+    struct SR1PatchOffsets {
+      uint32_t check_addr;
+      uint32_t check_value;
+      uint32_t beNOP;
+      uint32_t mousefix_addr1;
+      uint32_t mousefix_addr2;
+      uint32_t mousefix_addr3;
+      uint32_t aim_assist_xbtl;  // File declares aim_assist values.
+      uint32_t havok_write_frametime_address1;
+      uint32_t havok_write_frametime_address2;
+    };
+    std::vector<SR1PatchOffsets> supported_builds = {
+        // TU1 Release build
+        {0x82050304, 0x7361696E, 0x60000000, 0x8249db00, 0x8249dd28, 0x8249dd50,
+         0x82079cbc, 0x82195324, 0x8225BD8C},
+    };
+    for (auto& build : supported_builds) {
+      auto* test_addr = (xe::be<uint32_t>*)module->memory()->TranslateVirtual(
+          build.check_addr);
+      if (*test_addr != build.check_value) {
+        continue;
+      }
+      // Write beNOP to each write address
+      patch_addr(build.mousefix_addr1, build.beNOP);
+      patch_addr(build.mousefix_addr2, build.beNOP);
+      patch_addr(build.mousefix_addr3, build.beNOP);
+      if (cvars::disable_autoaim && build.aim_assist_xbtl) {
+        patch_addr(build.aim_assist_xbtl, build.beNOP);
+      }
+      if (cvars::sr_havok_fix_frametime &&
+          build.havok_write_frametime_address1 &&
+          build.havok_write_frametime_address2) {
+        patch_addr(build.havok_write_frametime_address1, build.beNOP);
+        patch_addr(build.havok_write_frametime_address2, build.beNOP);
       }
 
       break;
