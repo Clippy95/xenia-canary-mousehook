@@ -31,6 +31,9 @@ class SaintsRow1Game : public HookableGame {
   bool DoHooks(uint32_t user_index, RawInputState& input_state,
                X_INPUT_STATE* out_state);
   void FixHavokFrameTime(float frametime);
+  bool isTervelPlugin();
+  bool inFirstPerson();
+  bool isPaused();
   std::string ChooseBinds();
   bool ModifierKeyHandler(uint32_t user_index, RawInputState& input_state,
                           X_INPUT_STATE* out_state);
@@ -41,6 +44,7 @@ class SaintsRow1Game : public HookableGame {
   // -Clippy95
   std::chrono::steady_clock::time_point last_movement_time_x_;
   std::chrono::steady_clock::time_point last_movement_time_y_;
+  uint8_t tervelplugin_status;
 };
 
 }  // namespace winkey

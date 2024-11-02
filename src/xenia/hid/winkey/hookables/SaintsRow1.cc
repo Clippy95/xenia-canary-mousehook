@@ -47,13 +47,19 @@ struct GameBuildAddrs {
                                        //       current_frametime);
   uint32_t ingame_sens;
   uint32_t current_fov_address;
+  uint32_t isfirstperson_address;  // Unused game camera mode ; toggleable with
+                                   // a console command mostly usable with
+                                   // Tervel's sr1fineaim plugin.
+  uint32_t fineaim_y_address;
+  uint32_t slow_pan_horizontal_multiplier_address;
 };
 
 std::map<SaintsRow1Game::GameBuild, GameBuildAddrs> supported_builds{
     {SaintsRow1Game::GameBuild::Unknown, {" ", NULL, NULL}},
     {SaintsRow1Game::GameBuild::SaintsRow1_TU1,
      {"1.0.1", 0x827f9af8, 0x827F9B00, 0x82932407, 0x8283CA7B, 0x835F27A3,
-      0x835F2684, 0x827CA69C, 0x827F9AD8, 0x827F9B58}}};
+      0x835F2684, 0x827CA69C, 0x827F9AD8, 0x827F9B58, 0x827F99C7, 0x827F9BA4,
+      0x827F956C}}};
 
 SaintsRow1Game::~SaintsRow1Game() = default;
 
@@ -94,9 +100,22 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   }
 
   // REMOVE THIS FOR RELEASE NEEDS TO BE A PATCH!
+  // xtbl edits can't be made into a patch most likely?
   xe::be<float>* ingamesens_x =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(
           supported_builds[game_build_].ingame_sens);
+
+  xe::be<float>* slow_pan_horizontal_multiplier =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(
+          supported_builds[game_build_].slow_pan_horizontal_multiplier_address);
+
+  xe::be<float>* slow_pan_vertical_multiplier =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(
+          supported_builds[game_build_].slow_pan_horizontal_multiplier_address +
+          0x4);
+
+  float slow_pan = *slow_pan_horizontal_multiplier;
+
   float x_sens = *ingamesens_x;
   xe::be<float>* ingamesens_y =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -107,12 +126,18 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
     *ingamesens_y = 0.01999999955f;
   }
 
+  if (slow_pan != 0.00009999999747f) {
+    *slow_pan_horizontal_multiplier = 0.00009999999747f;
+    *slow_pan_vertical_multiplier = 0.00009999999747f;
+  }
+
   xe::be<float>* ingame_frametime =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(
           supported_builds[game_build_].current_frametime_address);
 
   float frametime = *ingame_frametime;
-  if (cvars::sr_havok_fix_frametime) FixHavokFrameTime(frametime);
+  if (cvars::sr_havok_fix_frametime && !isTervelPlugin())
+    FixHavokFrameTime(frametime);
 
   // float correctFrametime = 1 / *currentFPS;
 
@@ -126,56 +151,54 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
                        now - last_movement_time_y_)
                        .count();
 
-  // Declare static variables for last deltas
-  static int last_x_delta = 0;
-  static int last_y_delta = 0;
+  if (!(inFirstPerson() && isTervelPlugin())) {
+    // Declare static variables for last deltas
+    static int last_x_delta = 0;
+    static int last_y_delta = 0;
 
-  const long long hold_time =
-      static_cast<long long>(cvars::right_stick_hold_time_workaround);
-  // Check for mouse movement and set thumbstick values
-  if (input_state.mouse.x_delta != 0) {
-    if (input_state.mouse.x_delta > 0) {
-      out_state->gamepad.thumb_rx = SHRT_MAX;
-    } else {
-      out_state->gamepad.thumb_rx = SHRT_MIN;
+    const long long hold_time =
+        static_cast<long long>(cvars::right_stick_hold_time_workaround);
+    // Check for mouse movement and set thumbstick values
+    if (input_state.mouse.x_delta != 0) {
+      if (input_state.mouse.x_delta > 0) {
+        out_state->gamepad.thumb_rx = SHRT_MAX;
+      } else {
+        out_state->gamepad.thumb_rx = SHRT_MIN;
+      }
+      last_movement_time_x_ = now;
+      last_x_delta = input_state.mouse.x_delta;
+    } else if (elapsed_x < hold_time) {  // hold time
+      if (last_x_delta > 0) {
+        out_state->gamepad.thumb_rx = SHRT_MAX;
+      } else {
+        out_state->gamepad.thumb_rx = SHRT_MIN;
+      }
     }
-    last_movement_time_x_ = now;
-    last_x_delta = input_state.mouse.x_delta;
-  } else if (elapsed_x < hold_time) {  // hold time
-    if (last_x_delta > 0) {
-      out_state->gamepad.thumb_rx = SHRT_MAX;
-    } else {
-      out_state->gamepad.thumb_rx = SHRT_MIN;
+
+    if (input_state.mouse.y_delta != 0) {
+      if (input_state.mouse.y_delta > 0) {
+        out_state->gamepad.thumb_ry = SHRT_MAX;
+      } else {
+        out_state->gamepad.thumb_ry = SHRT_MIN;
+      }
+      last_movement_time_y_ = now;
+      last_y_delta = input_state.mouse.y_delta;
+    } else if (elapsed_y < hold_time) {  // hold time
+      if (last_y_delta > 0) {
+        out_state->gamepad.thumb_ry = SHRT_MIN;
+      } else {
+        out_state->gamepad.thumb_ry = SHRT_MAX;
+      }
+    }
+
+    // Return true if either X or Y delta is non-zero or if within the hold time
+    if (input_state.mouse.x_delta == 0 && input_state.mouse.y_delta == 0 &&
+        elapsed_x >= hold_time && elapsed_y >= hold_time) {
+      return false;
     }
   }
-
-  if (input_state.mouse.y_delta != 0) {
-    if (input_state.mouse.y_delta > 0) {
-      out_state->gamepad.thumb_ry = SHRT_MAX;
-    } else {
-      out_state->gamepad.thumb_ry = SHRT_MIN;
-    }
-    last_movement_time_y_ = now;
-    last_y_delta = input_state.mouse.y_delta;
-  } else if (elapsed_y < hold_time) {  // hold time
-    if (last_y_delta > 0) {
-      out_state->gamepad.thumb_ry = SHRT_MIN;
-    } else {
-      out_state->gamepad.thumb_ry = SHRT_MAX;
-    }
-  }
-
-  // Return true if either X or Y delta is non-zero or if within the hold time
-  if (input_state.mouse.x_delta == 0 && input_state.mouse.y_delta == 0 &&
-      elapsed_x >= hold_time && elapsed_y >= hold_time) {
-    return false;
-  }
-
   // Stop mouse this late here to allow RS in menus and frametime fix to apply.
-  auto* pause_flag = kernel_memory()->TranslateVirtual<uint8_t*>(
-      supported_builds[game_build_].menu_status_address);
-
-  if (*pause_flag != 2) return false;
+  if (isPaused()) return false;
 
   XThread* current_thread = XThread::GetCurrentThread();
 
@@ -200,6 +223,20 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   float divider_y = 15.f;
   float divider_x = 1350.f;
 
+  static xe::be<float>* fine_aim_x = NULL;
+  static xe::be<float>* fine_aim_y = NULL;
+  if (inFirstPerson() && isTervelPlugin()) {
+    divider_x = 15.f;
+    frametime = 1.f;
+
+    fine_aim_x = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+        supported_builds[game_build_].fineaim_y_address + 0x4);
+
+    fine_aim_y = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+        supported_builds[game_build_].fineaim_y_address);
+    degree_x = RadianstoDegree(*fine_aim_x);
+  }
+
   if (fov < 60.f) {
     fov = 60.f / fov;
     divider_y = divider_y * fov;
@@ -211,7 +248,7 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   // sensitivity fluctuation due to framerate as that's what the game does at
   // 8249DD28(TU1); x_axis_addition = -(float)((float)_FP12 / frametime);
   // stuttering might still occur due to framerates, as it's expected each
-  // frame? -= isn't ideal but that's the only way it works.
+  // frame? -= isn't ideal but that's the only way it works. - Clippy95
   if (!cvars::invert_x) {
     degree_x +=
         ((input_state.mouse.x_delta / divider_x) * (float)cvars::sensitivity) /
@@ -221,18 +258,25 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
         ((input_state.mouse.x_delta / divider_x) * (float)cvars::sensitivity) /
         frametime;
   }
+  if (!(inFirstPerson() && isTervelPlugin()))
+    *addition_x = degree_x;
+  else if (*fine_aim_x != NULL)
+    *fine_aim_x = DegreetoRadians(degree_x);
 
-  *addition_x = degree_x;
+  float delta_y =
+      (input_state.mouse.y_delta / divider_y) * (float)cvars::sensitivity;
 
-  if (!cvars::invert_y) {
-    degree_y +=
-        (input_state.mouse.y_delta / divider_y) * (float)cvars::sensitivity;
-  } else {
-    degree_y -=
-        (input_state.mouse.y_delta / divider_y) * (float)cvars::sensitivity;
+  if (cvars::invert_y) {
+    delta_y = -delta_y;
   }
 
+  degree_y += delta_y;
   *radian_y = DegreetoRadians(degree_y);
+  if ((inFirstPerson() && isTervelPlugin())) {
+    degree_y = RadianstoDegree(*fine_aim_y);
+    degree_y += delta_y;
+    *fine_aim_y = DegreetoRadians(degree_y);
+  }
   return true;
 }
 
@@ -247,6 +291,52 @@ void SaintsRow1Game::FixHavokFrameTime(float frametime) {
   } else {
     if (*havok_frametime != 0.01666666666f) *havok_frametime = 0.01666666666f;
   }
+}
+
+bool SaintsRow1Game::isTervelPlugin() {
+  /* Although the fineaim option exists as a console command, realistically
+     users will be using a plugin to switch to it. DoHooks only checks
+     isTervelPlugin when supported game is loaded, we can't hog GetModule
+     otherwise it causes an impact performance according to SourceEngine.cc
+     */
+  if (!isPaused()) {
+    if (tervelplugin_status == 0) {
+      if (kernel_state()->GetModule("sr1fineaim.xex")) {
+        tervelplugin_status = 1;
+        return true;
+      } else {
+        tervelplugin_status = 2;
+        return false;
+      }
+      return false;
+    }
+    if (tervelplugin_status == 1) {
+      return true;
+    } else
+      return false;
+
+    return false;
+  } else
+    return false;
+}
+
+bool SaintsRow1Game::inFirstPerson() {
+  auto* firstperson = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].isfirstperson_address);
+  if (*firstperson && *firstperson == 1)
+    return true;
+  else
+    return false;
+}
+
+bool SaintsRow1Game::isPaused() {
+  auto* pause_flag = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].menu_status_address);
+
+  if (*pause_flag != 2)
+    return true;
+  else
+    return false;
 }
 
 std::string SaintsRow1Game::ChooseBinds() {
