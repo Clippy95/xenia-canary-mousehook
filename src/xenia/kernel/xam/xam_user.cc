@@ -36,33 +36,40 @@ X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
   if (!xuid_ptr) {
     return X_E_INVALIDARG;
   }
+
+  *xuid_ptr = 0;
+
+  if (user_index >= XUserMaxUserCount) {
+    return X_E_INVALIDARG;
+  }
+
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
+  }
+
+  const auto& user_profile =
+      kernel_state()->xam_state()->GetUserProfile(user_index);
+
   uint32_t result = X_E_NO_SUCH_USER;
   uint64_t xuid = 0;
-  if (user_index < 4) {
-    if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-      const auto& user_profile =
-          kernel_state()->xam_state()->GetUserProfile(user_index);
 
-      const uint32_t local =
-          static_cast<uint32_t>(X_USER_SIGNIN_STATE::SignedInLocally);
-      const uint32_t live =
-          static_cast<uint32_t>(X_USER_SIGNIN_STATE::SignedInToLive);
+  const uint32_t local =
+      static_cast<uint32_t>(X_USER_SIGNIN_STATE::SignedInLocally);
+  const uint32_t live =
+      static_cast<uint32_t>(X_USER_SIGNIN_STATE::SignedInToLive);
 
-      auto type = user_profile->type() & type_mask;
+  auto type = user_profile->type() & type_mask;
 
-      if (type & (live | 4)) {
-        // Online XUID
-        xuid = user_profile->xuid();
-        result = X_E_SUCCESS;
-      } else if (type & local) {
-        // Offline XUID
-        xuid = user_profile->xuid();
-        result = X_E_SUCCESS;
-      }
-    }
-  } else {
-    result = X_E_INVALIDARG;
+  if (type & (live | 4)) {
+    // Online XUID
+    xuid = user_profile->xuid();
+    result = X_E_SUCCESS;
+  } else if (type & local) {
+    // Offline XUID
+    xuid = user_profile->xuid();
+    result = X_E_SUCCESS;
   }
+
   *xuid_ptr = xuid;
   return result;
 }
@@ -71,15 +78,15 @@ DECLARE_XAM_EXPORT1(XamUserGetXUID, kUserProfiles, kImplemented);
 dword_result_t XamUserGetSigninState_entry(dword_t user_index) {
   // Yield, as some games spam this.
   xe::threading::MaybeYield();
-
   X_USER_SIGNIN_STATE signin_state = X_USER_SIGNIN_STATE::NotSignedIn;
+  if (user_index >= XUserMaxUserCount) {
+    return static_cast<uint32_t>(signin_state);
+  }
 
-  if (user_index < 4) {
-    if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-      const auto& user_profile =
-          kernel_state()->xam_state()->GetUserProfile(user_index);
-      signin_state = user_profile->signin_state();
-    }
+  if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    const auto& user_profile =
+        kernel_state()->xam_state()->GetUserProfile(user_index);
+    signin_state = user_profile->signin_state();
   }
 
   return static_cast<uint32_t>(signin_state);
@@ -104,11 +111,9 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
   }
 
   std::memset(info, 0, sizeof(X_USER_SIGNIN_INFO));
-  if (user_index > 3) {
+  if (user_index >= XUserMaxUserCount) {
     return X_E_NO_SUCH_USER;
   }
-
-  kernel_state()->xam_state()->UpdateUsedUserProfiles();
 
   if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
     const auto& user_profile =
@@ -140,7 +145,7 @@ DECLARE_XAM_EXPORT1(XamUserGetSigninInfo, kUserProfiles, kImplemented);
 
 dword_result_t XamUserGetName_entry(dword_t user_index, lpstring_t buffer,
                                     dword_t buffer_len) {
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -161,7 +166,7 @@ DECLARE_XAM_EXPORT1(XamUserGetName, kUserProfiles, kImplemented);
 dword_result_t XamUserGetGamerTag_entry(dword_t user_index,
                                         lpu16string_t buffer,
                                         dword_t buffer_len) {
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_E_INVALIDARG;
   }
 
@@ -258,9 +263,9 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
     return X_ERROR_INSUFFICIENT_BUFFER;
   }
 
-  // Title ID = 0 means us.
-  // 0xfffe07d1 = profile?
-  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index) && !xuids) {
+  auto user_profile = kernel_state()->xam_state()->GetUserProfile(user_index);
+
+  if (!user_profile && !xuids) {
     if (overlapped) {
       kernel_state()->CompleteOverlappedImmediate(
           kernel_state()->memory()->HostToGuestVirtual(overlapped),
@@ -269,8 +274,6 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
     }
     return X_ERROR_NO_SUCH_USER;
   }
-
-  auto user_profile = kernel_state()->xam_state()->GetUserProfile(user_index);
 
   if (xuids) {
     uint64_t user_xuid = static_cast<uint64_t>(xuids[0]);
@@ -284,6 +287,10 @@ uint32_t XamUserReadProfileSettingsEx(uint32_t title_id, uint32_t user_index,
       return X_ERROR_NO_SUCH_USER;
     }
     user_profile = kernel_state()->xam_state()->GetUserProfile(user_xuid);
+  }
+
+  if (!user_profile) {
+    return X_ERROR_NO_SUCH_USER;
   }
 
   // First call asks for size (fill buffer_size_ptr).
@@ -382,9 +389,12 @@ dword_result_t XamUserWriteProfileSettings_entry(
   if (!setting_count || !settings) {
     return X_ERROR_INVALID_PARAMETER;
   }
+  // Update and save settings.
+  const auto& user_profile =
+      kernel_state()->xam_state()->GetUserProfile(user_index);
 
   // Skip writing data about users with id != 0 they're not supported
-  if (user_index > 0) {
+  if (!user_profile) {
     if (overlapped) {
       kernel_state()->CompleteOverlappedImmediate(
           kernel_state()->memory()->HostToGuestVirtual(overlapped),
@@ -393,9 +403,6 @@ dword_result_t XamUserWriteProfileSettings_entry(
     }
     return X_ERROR_SUCCESS;
   }
-  // Update and save settings.
-  const auto& user_profile =
-      kernel_state()->xam_state()->GetUserProfile(user_index);
 
   for (uint32_t n = 0; n < setting_count; ++n) {
     const X_USER_PROFILE_SETTING& setting = settings[n];
@@ -458,8 +465,8 @@ DECLARE_XAM_EXPORT1(XamUserWriteProfileSettings, kUserProfiles, kImplemented);
 dword_result_t XamUserCheckPrivilege_entry(dword_t user_index, dword_t type,
                                            lpdword_t out_value) {
   // checking all users?
-  if (user_index != 0xFF) {
-    if (user_index >= 4) {
+  if (user_index != XUserIndexAny) {
+    if (user_index >= XUserMaxUserCount) {
       return X_ERROR_INVALID_PARAMETER;
     }
 
@@ -530,7 +537,7 @@ dword_result_t XamUserIsOnlineEnabled_entry(dword_t user_index) { return 1; }
 DECLARE_XAM_EXPORT1(XamUserIsOnlineEnabled, kUserProfiles, kStub);
 
 dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -557,7 +564,7 @@ dword_result_t XamUserAreUsersFriends_entry(
   bool are_friends = false;
   X_RESULT result;
 
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     result = X_ERROR_INVALID_PARAMETER;
   } else {
     if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
@@ -607,49 +614,16 @@ dword_result_t XamUserAreUsersFriends_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserAreUsersFriends, kUserProfiles, kStub);
 
-dword_result_t XamShowSigninUI_entry(dword_t users_needed, dword_t unk_mask) {
-  // XN_SYS_UI (on)
-  kernel_state()->BroadcastNotification(kXNotificationIDSystemUI, 1);
-  kernel_state()->xam_state()->UpdateUsedUserProfiles();
-  // Mask values vary. Probably matching user types? Local/remote?
-  // Games seem to sit and loop until we trigger this notification:
-
-  auto run = [users_needed]() -> void {
-    uint32_t user_mask = 0;
-    uint32_t active_users = 0;
-
-    for (uint32_t i = 0; i < 4; i++) {
-      if (kernel_state()->xam_state()->IsUserSignedIn(i)) {
-        user_mask |= (1 << i);
-        active_users++;
-        if (active_users >= users_needed) break;
-      }
-    }
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
-    // XN_SYS_SIGNINCHANGED (players)
-    kernel_state()->BroadcastNotification(kXNotificationIDSystemSignInChanged,
-                                          user_mask);
-    // XN_SYS_UI (off)
-    kernel_state()->BroadcastNotification(kXNotificationIDSystemUI, 0);
-  };
-
-  std::thread thread(run);
-  thread.detach();
-
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamShowSigninUI, kUserProfiles, kStub);
-
 dword_result_t XamUserGetIndexFromXUID_entry(qword_t xuid, dword_t flags,
                                              pointer_t<uint32_t> index) {
-  auto const profile = kernel_state()->xam_state()->GetUserProfile(xuid);
-
-  if (!profile) {
+  if (!kernel_state()->xam_state()->IsUserSignedIn(xuid)) {
     return X_ERROR_NO_SUCH_USER;
   }
 
-  *index = profile->index();
+  *index = kernel_state()
+               ->xam_state()
+               ->profile_manager()
+               ->GetUserIndexAssignedToProfile(xuid);
 
   return X_ERROR_SUCCESS;
 }
@@ -663,7 +637,7 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -805,7 +779,7 @@ dword_result_t XamUserGetSubscriptionType_entry(dword_t user_index,
                                                 dword_t unk2, dword_t unk3,
                                                 dword_t unk4, dword_t unk5,
                                                 dword_t unk6) {
-  if (!unk2 || !unk3 || user_index > 4) {
+  if (!unk2 || !unk3 || user_index >= XUserMaxUserCount) {
     return X_E_INVALIDARG;
   }
 
@@ -830,7 +804,7 @@ dword_result_t XamUserCreateStatsEnumerator_entry(
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 

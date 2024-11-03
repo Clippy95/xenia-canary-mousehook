@@ -383,6 +383,10 @@ X_HRESULT XLiveBaseApp::XPresenceSubscribe(uint32_t buffer_length) {
   const xe::be<uint64_t>* peer_xuids =
       memory->TranslateVirtual<xe::be<uint64_t>*>(xuid_address);
 
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
+  }
+
   const auto profile = kernel_state()->xam_state()->GetUserProfile(user_index);
 
   for (uint32_t i = 0; i < num_peers; i++) {
@@ -441,6 +445,10 @@ X_HRESULT XLiveBaseApp::XPresenceUnsubscribe(uint32_t buffer_length) {
 
   const xe::be<uint64_t>* peer_xuids =
       memory->TranslateVirtual<xe::be<uint64_t>*>(xuid_address);
+
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
+  }
 
   const auto profile = kernel_state()->xam_state()->GetUserProfile(user_index);
 
@@ -515,6 +523,10 @@ X_HRESULT XLiveBaseApp::XPresenceCreateEnumerator(uint32_t buffer_length) {
 
   if (!handle_address) {
     return X_E_INVALIDARG;
+  }
+
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
   }
 
   const auto profile = kernel_state()->xam_state()->GetUserProfile(user_index);
@@ -642,6 +654,10 @@ X_HRESULT XLiveBaseApp::CreateFriendsEnumerator(uint32_t buffer_args) {
 
   uint32_t* buffer_ptr = memory->TranslateVirtual<uint32_t*>(buffer_address);
   uint32_t* handle_ptr = memory->TranslateVirtual<uint32_t*>(handle_address);
+
+  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    return X_E_NO_SUCH_USER;
+  }
 
   auto const profile = kernel_state()->xam_state()->GetUserProfile(user_index);
 

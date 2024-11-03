@@ -53,6 +53,8 @@ class XContentContainerDevice : public Device {
     return files_total_size_ - sizeof(XContentContainerHeader);
   }
 
+  uint64_t xuid() const { return header_->content_metadata.profile_id; }
+
   uint32_t title_id() const {
     return header_->content_metadata.execution_info.title_id;
   }
@@ -62,6 +64,9 @@ class XContentContainerDevice : public Device {
   }
 
   kernel::xam::XCONTENT_AGGREGATE_DATA content_header() const;
+  uint32_t license_mask() const {
+    return header_->content_header.licenses[0].license_bits;
+  }
 
  protected:
   XContentContainerDevice(const std::string_view mount_path,

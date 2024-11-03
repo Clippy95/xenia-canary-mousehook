@@ -25,157 +25,21 @@
 
 #include "xenia/kernel/XLiveAPI.h"
 
-using namespace xe::string_util;
-
 namespace xe {
 namespace kernel {
 namespace xam {
 
-// cpptoml parses uint64_t as int64_t, but XUIDs are uint64_t therefore we must
-// store XUIDs as hex strings to get around this issue.
-DEFINE_string(user_0_xuid, to_hex_string(UserProfile::GenerateOnlineXUID()),
-              "XUID for user 0", "User");
-DEFINE_string(user_1_xuid, to_hex_string(UserProfile::GenerateOnlineXUID()),
-              "XUID for user 1", "User");
-DEFINE_string(user_2_xuid, to_hex_string(UserProfile::GenerateOnlineXUID()),
-              "XUID for user 2", "User");
-DEFINE_string(user_3_xuid, to_hex_string(UserProfile::GenerateOnlineXUID()),
-              "XUID for user 3", "User");
-
-DEFINE_string(user_0_name, UserProfile::GenerateGamertag(user_0_xuid),
-              "Gamertag for user 0. 15 characters max.", "User");
-DEFINE_string(user_1_name, UserProfile::GenerateGamertag(user_1_xuid),
-              "Gamertag for user 1. 15 characters max.", "User");
-DEFINE_string(user_2_name, UserProfile::GenerateGamertag(user_2_xuid),
-              "Gamertag for user 2. 15 characters max.", "User");
-DEFINE_string(user_3_name, UserProfile::GenerateGamertag(user_3_xuid),
-              "Gamertag for user 3. 15 characters max.", "User");
-
-constexpr uint32_t kDashboardID = 0xFFFE07D1;
-
-UserProfile::UserProfile(uint8_t index) {
+UserProfile::UserProfile(uint64_t xuid, X_XAMACCOUNTINFO* account_info)
+    : xuid_(xuid), account_info_(*account_info) {
   // 58410A1F checks the user XUID against a mask of 0x00C0000000000000 (3<<54),
   // if non-zero, it prevents the user from playing the game.
   // "You do not have permissions to perform this operation."
-  // xuid_ = 0xB13EBABEBABEBABE + index;
-  // name_ = "User";
-  // if (index) {
-  //  name_ = "User_" + std::to_string(index);
-  //}
 
   friends_ = std::vector<X_ONLINE_FRIEND>();
   subscriptions_ = std::map<uint64_t, X_ONLINE_PRESENCE>();
 
-  index_ = index;
-
-  switch (index) {
-    case 0: {
-      // If XUID is empty generate another one.
-      if (cvars::user_0_xuid.empty()) {
-        OVERRIDE_string(user_0_xuid,
-                        to_hex_string(UserProfile::GenerateOnlineXUID()));
-      }
-
-      if (cvars::user_0_name.empty()) {
-        OVERRIDE_string(user_0_name,
-                        UserProfile::GenerateGamertag(cvars::user_0_xuid));
-      }
-
-      if (cvars::user_0_name.length() > 15) {
-        OVERRIDE_string(user_0_name, cvars::user_0_name.substr(0, 15));
-      }
-
-      xuid_ =
-          string_util::from_string<uint64_t>(cvars::user_0_xuid.c_str(), true);
-      name_ = cvars::user_0_name;
-
-      for (const auto& xuid : XLiveAPI::ParseFriendsXUIDs()) {
-        if (xuid != xuid_) {
-          AddFriendFromXUID(xuid);
-        }
-      }
-
-      if (!IsXUIDValid()) {
-        XELOGI("User 0: {} has an invalid XUID of {}", name_,
-               cvars::user_0_xuid);
-      }
-      break;
-    }
-    case 1: {
-      if (cvars::user_1_xuid.empty()) {
-        OVERRIDE_string(user_1_xuid,
-                        to_hex_string(UserProfile::GenerateOnlineXUID()));
-      }
-
-      if (cvars::user_1_name.empty()) {
-        OVERRIDE_string(user_1_name,
-                        UserProfile::GenerateGamertag(cvars::user_1_xuid));
-      }
-
-      if (cvars::user_1_name.length() > 15) {
-        OVERRIDE_string(user_1_name, cvars::user_1_name.substr(0, 15));
-      }
-
-      xuid_ =
-          string_util::from_string<uint64_t>(cvars::user_1_xuid.c_str(), true);
-      name_ = cvars::user_1_name;
-
-      if (!IsXUIDValid()) {
-        XELOGI("User 1: {} has an invalid XUID of {}", name_,
-               cvars::user_1_xuid);
-      }
-      break;
-    }
-    case 2: {
-      if (cvars::user_2_xuid.empty()) {
-        OVERRIDE_string(user_2_xuid,
-                        to_hex_string(UserProfile::GenerateOnlineXUID()));
-      }
-
-      if (cvars::user_2_name.empty()) {
-        OVERRIDE_string(user_2_name,
-                        UserProfile::GenerateGamertag(cvars::user_2_xuid));
-      }
-
-      if (cvars::user_2_name.length() > 15) {
-        OVERRIDE_string(user_2_name, cvars::user_2_name.substr(0, 15));
-      }
-
-      xuid_ =
-          string_util::from_string<uint64_t>(cvars::user_2_xuid.c_str(), true);
-      name_ = cvars::user_2_name;
-
-      if (!IsXUIDValid()) {
-        XELOGI("User 2: {} has an invalid XUID of {}", name_,
-               cvars::user_2_xuid);
-      }
-      break;
-    }
-    case 3: {
-      if (cvars::user_3_xuid.empty()) {
-        OVERRIDE_string(user_3_xuid,
-                        to_hex_string(UserProfile::GenerateOnlineXUID()));
-      }
-
-      if (cvars::user_3_name.empty()) {
-        OVERRIDE_string(user_3_name,
-                        UserProfile::GenerateGamertag(cvars::user_3_xuid));
-      }
-
-      if (cvars::user_3_name.length() > 15) {
-        OVERRIDE_string(user_3_name, cvars::user_3_name.substr(0, 15));
-      }
-
-      xuid_ =
-          string_util::from_string<uint64_t>(cvars::user_3_xuid.c_str(), true);
-      name_ = cvars::user_3_name;
-
-      if (!IsXUIDValid()) {
-        XELOGI("User 3: {} has an invalid XUID of {}", name_,
-               cvars::user_3_xuid);
-      }
-      break;
-    }
+  for (const auto& friend_xuid : XLiveAPI::ParseFriendsXUIDs()) {
+    AddFriendFromXUID(friend_xuid);
   }
 
   // https://cs.rin.ru/forum/viewtopic.php?f=38&t=60668&hilit=gfwl+live&start=195
@@ -259,7 +123,8 @@ X_ONLINE_FRIEND UserProfile::GenerateDummyFriend() {
 
   const uint32_t user_state = X_ONLINE_FRIENDSTATE_ENUM_ONLINE;
 
-  dummy_friend.xuid = GenerateOnlineXUID();
+  dummy_friend.xuid =
+      kernel_state()->xam_state()->profile_manager()->GenerateXuidOnline();
   dummy_friend.session_id = XNKID();
   dummy_friend.state = player_state | user_state;
 
@@ -577,7 +442,7 @@ UserSetting* UserProfile::GetSetting(uint32_t setting_id) {
 void UserProfile::LoadSetting(UserSetting* setting) {
   if (setting->is_title_specific()) {
     const std::filesystem::path content_dir =
-        kernel_state()->content_manager()->ResolveGameUserContentPath();
+        kernel_state()->content_manager()->ResolveGameUserContentPath(xuid_);
     const std::string setting_id_str =
         fmt::format("{:08X}", setting->GetSettingId());
     const std::filesystem::path file_path = content_dir / setting_id_str;
@@ -623,7 +488,7 @@ void UserProfile::SaveSetting(UserSetting* setting) {
   if (setting->is_title_specific() &&
       setting->GetSettingSource() == X_USER_PROFILE_SETTING_SOURCE::TITLE) {
     const std::filesystem::path content_dir =
-        kernel_state()->content_manager()->ResolveGameUserContentPath();
+        kernel_state()->content_manager()->ResolveGameUserContentPath(xuid_);
 
     std::filesystem::create_directories(content_dir);
 

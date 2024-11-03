@@ -164,50 +164,10 @@ class UserSetting {
 
 class UserProfile {
  public:
-  UserProfile(uint8_t index);
-
-  static uint64_t GenerateXUIDMask(uint8_t randomized_bits = 8) {
-    if (randomized_bits > 8) {
-      randomized_bits = 8;
-    }
-
-    std::random_device rnd;
-    std::mt19937_64 gen(rnd());
-
-    uint64_t mask = 0;
-
-    std::uniform_int_distribution<int> dist(0x00, 0xFF);
-
-    for (uint8_t bits = 0; bits < randomized_bits; bits++) {
-      mask = (mask << 8) | dist(gen);
-    }
-
-    return mask;
-  }
-
-  static uint64_t GenerateOfflineXUID() {
-    return (0xEULL << 60) | (GenerateXUIDMask(8) & 0x0FFFFFFFFFFFFFFFULL);
-  }
-
-  static uint64_t GenerateOnlineXUID() {
-    return (0x9ULL << 48) | (GenerateXUIDMask(6) & 0x0000FFFFFFFFFFFFULL);
-  }
-
-  static std::string GenerateGamertag(const std::string& xuid) {
-    std::string suffix = xuid.substr(xuid.size() - 4);
-
-    uint16_t value = string_util::from_string<uint16_t>(suffix.c_str(), true);
-
-    return "XeniaUser" + std::to_string(value);
-  }
-
-  bool IsXUIDOffline() { return ((xuid_ >> 60) & 0xF) == 0xE; }
-  bool IsXUIDOnline() { return ((xuid_ >> 48) & 0xFFFF) == 0x9; }
-  bool IsXUIDValid() { return IsXUIDOffline() != IsXUIDOnline(); }
+  UserProfile(uint64_t xuid, X_XAMACCOUNTINFO* account_info);
 
   uint64_t xuid() const { return xuid_; }
-  uint32_t index() const { return index_; }
-  std::string name() const { return name_; }
+  std::string name() const { return account_info_.GetGamertagString(); }
   X_USER_SIGNIN_STATE signin_state() const {
     return cvars::offline_mode ? X_USER_SIGNIN_STATE::SignedInLocally
                                : X_USER_SIGNIN_STATE::SignedInToLive;
@@ -257,8 +217,8 @@ class UserProfile {
 
  private:
   uint64_t xuid_;
-  uint32_t index_;
-  std::string name_;
+  X_XAMACCOUNTINFO account_info_;
+
   std::vector<std::unique_ptr<UserSetting>> setting_list_;
   std::unordered_map<uint32_t, UserSetting*> settings_;
   std::vector<X_ONLINE_FRIEND> friends_;

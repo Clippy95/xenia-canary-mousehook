@@ -253,11 +253,6 @@ void XLiveAPI::Init() {
     return;
   }
 
-  // FIXME:
-  const auto profile = kernel_state()->xam_state()->GetUserProfile((uint32_t)0);
-
-  profile->AddDummyFriends(dummy_friends_count);
-
   if (cvars::upnp) {
     upnp_handler->Initialize();
   }
@@ -283,25 +278,19 @@ void XLiveAPI::Init() {
   // Download ports mappings before initializing UPnP.
   DownloadPortMappings();
 
-  // Must get mac address and IP before registering.
   std::unique_ptr<HTTPResponseObjectJSON> reg_result = RegisterPlayer();
 
-  // If player already exists on server then no need to post it again?
-  auto player = FindPlayer(OnlineIP_str());
+  if (reg_result &&
+      reg_result->StatusCode() == HTTP_STATUS_CODE::HTTP_CREATED) {
+    const uint32_t index = 0;
+    const auto profile = kernel_state()->xam_state()->GetUserProfile(index);
 
-  if (player->XUID() != profile->xuid()) {
-    XELOGI("XLiveAPI:: Player 0 XUID mismatch!");
-    xuid_mismatch = true;
-
-    assert_always();
+    if (profile->GetFriends().size() < dummy_friends_count) {
+      profile->AddDummyFriends(dummy_friends_count);
+    }
   }
 
-  if (reg_result->StatusCode() == HTTP_STATUS_CODE::HTTP_CREATED &&
-      player->XUID() != 0) {
-    initialized_ = InitState::Success;
-  } else {
-    initialized_ = InitState::Failed;
-  }
+  initialized_ = InitState::Success;
 
   // Delete sessions on start-up.
   DeleteAllSessions();
@@ -571,6 +560,14 @@ std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::RegisterPlayer() {
 
   std::unique_ptr<HTTPResponseObjectJSON> response{};
 
+  // User index hard-coded
+  const uint32_t index = 0;
+
+  if (!kernel_state()->xam_state()->IsUserSignedIn(index)) {
+    XELOGE("Cancelled Registering Player, player not signed in!");
+    return response;
+  }
+
   if (!mac_address_) {
     XELOGE("Cancelled Registering Player");
     return response;
@@ -579,9 +576,8 @@ std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::RegisterPlayer() {
   PlayerObjectJSON player = PlayerObjectJSON();
 
   // User index hard-coded
-  player.XUID(kernel_state()->xam_state()->GetUserProfile((uint32_t)0)->xuid());
-  player.Gamertag(
-      kernel_state()->xam_state()->GetUserProfile((uint32_t)0)->name());
+  player.XUID(kernel_state()->xam_state()->GetUserProfile(index)->xuid());
+  player.Gamertag(kernel_state()->xam_state()->GetUserProfile(index)->name());
   player.MachineID(GetLocalMachineId());
   player.HostAddress(OnlineIP_str());
   player.MacAddress(mac_address_->to_uint64());
@@ -598,6 +594,18 @@ std::unique_ptr<HTTPResponseObjectJSON> XLiveAPI::RegisterPlayer() {
   }
 
   XELOGI("POST Success");
+
+  auto player_lookup = FindPlayer(OnlineIP_str());
+
+  // Check for errnours profile lookup
+  if (player_lookup->XUID() != player.XUID()) {
+    XELOGI("XLiveAPI:: {} XUID mismatch!", player.Gamertag());
+    xuid_mismatch = true;
+
+    // assert_always();
+  } else {
+    xuid_mismatch = false;
+  }
 
   return response;
 }

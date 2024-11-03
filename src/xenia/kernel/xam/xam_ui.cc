@@ -10,7 +10,9 @@
 #include "third_party/imgui/imgui.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string_util.h"
+#include "xenia/base/system.h"
 #include "xenia/emulator.h"
+#include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_flags.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -313,6 +315,72 @@ class MessageBoxDialog : public XamDialog {
   uint32_t chosen_button_ = 0;
 };
 
+class GamertagModifyDialog final : public ui::ImGuiDialog {
+ public:
+  GamertagModifyDialog(ui::ImGuiDrawer* imgui_drawer,
+                       ProfileManager* profile_manager, uint64_t xuid)
+      : ui::ImGuiDialog(imgui_drawer),
+        profile_manager_(profile_manager),
+        xuid_(xuid) {
+    memset(gamertag_, 0, sizeof(gamertag_));
+  }
+
+ private:
+  void OnDraw(ImGuiIO& io) override {
+    if (!has_opened_) {
+      ImGui::OpenPopup("Modify Gamertag");
+      has_opened_ = true;
+    }
+
+    bool dialog_open = true;
+    if (!ImGui::BeginPopupModal("Modify Gamertag", &dialog_open,
+                                ImGuiWindowFlags_NoCollapse |
+                                    ImGuiWindowFlags_AlwaysAutoResize |
+                                    ImGuiWindowFlags_HorizontalScrollbar)) {
+      Close();
+      return;
+    }
+
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !ImGui::IsAnyItemActive() && !ImGui::IsMouseClicked(0)) {
+      ImGui::SetKeyboardFocusHere(0);
+    }
+
+    ImGui::TextUnformatted("New gamertag:");
+    ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+
+    const std::string gamertag_string = std::string(gamertag_);
+    bool valid = profile_manager_->IsGamertagValid(gamertag_string);
+
+    ImGui::BeginDisabled(!valid);
+    if (ImGui::Button("Update")) {
+      profile_manager_->ModifyGamertag(xuid_, gamertag_string);
+      std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+      dialog_open = false;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+
+    if (ImGui::Button("Cancel")) {
+      std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+      dialog_open = false;
+    }
+
+    if (!dialog_open) {
+      ImGui::CloseCurrentPopup();
+      Close();
+      ImGui::EndPopup();
+      return;
+    }
+    ImGui::EndPopup();
+  };
+
+  bool has_opened_ = false;
+  char gamertag_[16] = "";
+  const uint64_t xuid_;
+  ProfileManager* profile_manager_;
+};
+
 static dword_result_t XamShowMessageBoxUi(
     dword_t user_index, lpu16string_t title_ptr, lpu16string_t text_ptr,
     dword_t button_count, lpdword_t button_ptrs, dword_t active_button,
@@ -571,13 +639,13 @@ dword_result_t XamShowDeviceSelectorUI_entry(
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if ((user_index >= 4 && user_index != 0xFF) ||
+  if ((user_index >= XUserMaxUserCount && user_index != XUserIndexAny) ||
       (content_flags & 0x83F00008) != 0 || !device_id_ptr) {
     XOverlappedSetExtendedError(overlapped, X_ERROR_INVALID_PARAMETER);
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if (user_index != 0xFF &&
+  if (user_index != XUserIndexAny &&
       !kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
     kernel_state()->CompleteOverlappedImmediate(overlapped,
                                                 X_ERROR_NO_SUCH_USER);
@@ -682,7 +750,7 @@ dword_result_t XamShowMarketplaceUI_entry(dword_t user_index, dword_t ui_type,
   // 1 - view content specified by offer id
   // content_types:
   // game specific, usually just -1
-  if (user_index >= 4) {
+  if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -758,7 +826,7 @@ dword_result_t XamShowMarketplaceDownloadItemsUI_entry(
   // ui_type:
   // 1000 - free
   // 1001 - paid
-  if (user_index >= 4 || !offers || num_offers > 6) {
+  if (user_index >= XUserMaxUserCount || !offers || num_offers > 6) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
@@ -824,6 +892,435 @@ dword_result_t XamShowMarketplaceDownloadItemsUI_entry(
       overlapped);
 }
 DECLARE_XAM_EXPORT1(XamShowMarketplaceDownloadItemsUI, kUI, kSketchy);
+
+bool xeDrawProfileContent(ui::ImGuiDrawer* imgui_drawer, const uint64_t xuid,
+                          const uint8_t user_index,
+                          const X_XAMACCOUNTINFO* account,
+                          uint64_t* selected_xuid) {
+  auto profile_manager = kernel_state()->xam_state()->profile_manager();
+
+  const float default_image_size = 75.0f;
+  auto position = ImGui::GetCursorPos();
+  const float selectable_height =
+      ImGui::GetTextLineHeight() *
+      5;  // 3 is for amount of lines of text behind image/object.
+  const auto font = imgui_drawer->GetIO().Fonts->Fonts[0];
+
+  const auto text_size = font->CalcTextSizeA(
+      font->FontSize, FLT_MAX, -1.0f,
+      fmt::format("XUID: {:016X}\n", 0xB13EBABEBABEBABE).c_str());
+
+  const auto image_scale = selectable_height / default_image_size;
+  const auto image_size = ImVec2(default_image_size * image_scale,
+                                 default_image_size * image_scale);
+
+  if (xuid && selected_xuid) {
+    // This includes 10% to include empty spaces between border and elements.
+    auto selectable_region_size =
+        ImVec2((image_size.x + text_size.x) * 1.10f, selectable_height);
+
+    if (ImGui::Selectable("##Selectable", *selected_xuid == xuid,
+                          ImGuiSelectableFlags_SpanAllColumns,
+                          selectable_region_size)) {
+      *selected_xuid = xuid;
+    }
+
+    if (ImGui::BeginPopupContextItem("Profile Menu")) {
+      if (user_index == static_cast<uint8_t>(-1)) {
+        if (ImGui::MenuItem("Login")) {
+          profile_manager->Login(xuid);
+        }
+
+        if (ImGui::BeginMenu("Login to slot:")) {
+          for (uint8_t i = 1; i <= XUserMaxUserCount; i++) {
+            if (ImGui::MenuItem(fmt::format("slot {}", i).c_str())) {
+              profile_manager->Login(xuid, i - 1);
+            }
+          }
+          ImGui::EndMenu();
+        }
+      } else {
+        if (ImGui::MenuItem("Logout")) {
+          profile_manager->Logout(user_index);
+        }
+      }
+
+      ImGui::BeginDisabled(kernel_state()->emulator()->is_title_open());
+      if (ImGui::BeginMenu("Modify")) {
+        if (ImGui::MenuItem("Gamertag")) {
+          new GamertagModifyDialog(imgui_drawer, profile_manager, xuid);
+        }
+
+        ImGui::MenuItem("Profile Icon (Unsupported)");
+        ImGui::EndMenu();
+      }
+      ImGui::EndDisabled();
+
+      ImGui::MenuItem("Show Achievements (unsupported)");
+
+      if (ImGui::MenuItem("Show Content Directory")) {
+        const auto path = profile_manager->GetProfileContentPath(
+            xuid, kernel_state()->title_id());
+
+        if (!std::filesystem::exists(path)) {
+          std::filesystem::create_directories(path);
+        }
+
+        std::thread path_open(LaunchFileExplorer, path);
+        path_open.detach();
+      }
+
+      if (!kernel_state()->emulator()->is_title_open()) {
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Delete Profile")) {
+          ImGui::BeginTooltip();
+          ImGui::TextUnformatted(
+              fmt::format("You're about to delete profile: {} (XUID: {:016X}). "
+                          "This will remove all data assigned to this profile "
+                          "including savefiles. Are you sure?",
+                          account->GetGamertagString(), xuid)
+                  .c_str());
+          ImGui::EndTooltip();
+
+          if (ImGui::MenuItem("Yes, delete it!")) {
+            profile_manager->DeleteProfile(xuid);
+            ImGui::EndMenu();
+            ImGui::EndPopup();
+            return false;
+          }
+
+          ImGui::EndMenu();
+        }
+      }
+      ImGui::EndPopup();
+    }
+  }
+
+  ImGui::SameLine();
+  ImGui::SetCursorPos(position);
+
+  // In the future it can be replaced with profile icon.
+  ImGui::Image(user_index < XUserMaxUserCount
+                   ? imgui_drawer->GetNotificationIcon(user_index)
+                   : nullptr,
+               ImVec2(default_image_size * image_scale,
+                      default_image_size * image_scale));
+
+  ImGui::SameLine();
+  position = ImGui::GetCursorPos();
+  ImGui::TextUnformatted(
+      fmt::format("User: {}\n", account->GetGamertagString()).c_str());
+
+  ImGui::SameLine();
+  ImGui::SetCursorPos(position);
+  ImGui::SetCursorPosY(position.y + ImGui::GetTextLineHeight());
+  ImGui::TextUnformatted(fmt::format("XUID: {:016X}\n", xuid).c_str());
+
+  ImGui::SameLine();
+  ImGui::SetCursorPos(position);
+  ImGui::SetCursorPosY(position.y + 2 * ImGui::GetTextLineHeight());
+
+  if (user_index != static_cast<uint8_t>(-1)) {
+    const std::string live_enabled = fmt::format(
+        "Xbox Live Enabled: {}", account->IsLiveEnabled() ? "True" : "False");
+
+    ImGui::TextUnformatted(live_enabled.c_str());
+
+    ImGui::SameLine();
+    ImGui::SetCursorPos(position);
+    ImGui::SetCursorPosY(position.y + 3 * ImGui::GetTextLineHeight());
+
+    ImGui::TextUnformatted(
+        fmt::format("Assigned to slot: {}\n", user_index + 1).c_str());
+  } else {
+    ImGui::TextUnformatted(fmt::format("Profile is not signed in").c_str());
+  }
+
+  return true;
+}
+
+class SigninDialog : public XamDialog {
+ public:
+  SigninDialog(xe::ui::ImGuiDrawer* imgui_drawer, uint32_t users_needed)
+      : XamDialog(imgui_drawer),
+        users_needed_(users_needed),
+        title_("Sign In") {
+    last_user_ = kernel_state()->emulator()->input_system()->GetLastUsedSlot();
+
+    for (uint8_t slot = 0; slot < XUserMaxUserCount; slot++) {
+      std::string name = fmt::format("Slot {:d}", slot + 1);
+      slot_data_.push_back({slot, name});
+    }
+  }
+
+  virtual ~SigninDialog() {}
+
+  void OnDraw(ImGuiIO& io) override {
+    bool first_draw = false;
+    if (!has_opened_) {
+      ImGui::OpenPopup(title_.c_str());
+      has_opened_ = true;
+      first_draw = true;
+      ReloadProfiles(true);
+    }
+    if (ImGui::BeginPopupModal(title_.c_str(), nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+      auto profile_manager = kernel_state()->xam_state()->profile_manager();
+      auto profiles = profile_manager->GetProfiles();
+
+      for (uint32_t i = 0; i < users_needed_; i++) {
+        ImGui::BeginGroup();
+
+        std::vector<const char*> combo_items;
+        int items_count = 0;
+        int current_item = 0;
+
+        // Fill slot list.
+        std::vector<uint8_t> slots;
+        slots.push_back(0xFF);
+        combo_items.push_back("---");
+        for (auto& elem : slot_data_) {
+          // Select the slot or skip it if it's already used.
+          bool already_taken = false;
+          for (uint32_t j = 0; j < users_needed_; j++) {
+            if (chosen_slots_[j] == elem.first) {
+              if (i == j) {
+                current_item = static_cast<int>(combo_items.size());
+              } else {
+                already_taken = true;
+              }
+              break;
+            }
+          }
+
+          if (already_taken) {
+            continue;
+          }
+
+          slots.push_back(elem.first);
+          combo_items.push_back(elem.second.c_str());
+        }
+        items_count = static_cast<int>(combo_items.size());
+
+        ImGui::BeginDisabled(users_needed_ == 1);
+        ImGui::Combo(fmt::format("##Slot{:d}", i).c_str(), &current_item,
+                     combo_items.data(), items_count);
+        chosen_slots_[i] = slots[current_item];
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+
+        combo_items.clear();
+        current_item = 0;
+
+        // Fill profile list.
+        std::vector<uint64_t> xuids;
+        xuids.push_back(0);
+        combo_items.push_back("---");
+        if (chosen_slots_[i] != 0xFF) {
+          for (auto& elem : profile_data_) {
+            // Select the profile or skip it if it's already used.
+            bool already_taken = false;
+            for (uint32_t j = 0; j < users_needed_; j++) {
+              if (chosen_xuids_[j] == elem.first) {
+                if (i == j) {
+                  current_item = static_cast<int>(combo_items.size());
+                } else {
+                  already_taken = true;
+                }
+                break;
+              }
+            }
+
+            if (already_taken) {
+              continue;
+            }
+
+            xuids.push_back(elem.first);
+            combo_items.push_back(elem.second.c_str());
+          }
+        }
+        items_count = static_cast<int>(combo_items.size());
+
+        ImGui::BeginDisabled(chosen_slots_[i] == 0xFF);
+        ImGui::Combo(fmt::format("##Profile{:d}", i).c_str(), &current_item,
+                     combo_items.data(), items_count);
+        chosen_xuids_[i] = xuids[current_item];
+        ImGui::EndDisabled();
+        ImGui::Spacing();
+
+        // Draw profile badge.
+        uint8_t slot = chosen_slots_[i];
+        uint64_t xuid = chosen_xuids_[i];
+
+        if (slot == 0xFF || xuid == 0 || profiles->count(xuid) == 0) {
+          float ypos = ImGui::GetCursorPosY();
+          ImGui::SetCursorPosY(ypos + ImGui::GetTextLineHeight() * 5);
+        } else {
+          const X_XAMACCOUNTINFO* account = &profiles->at(xuid);
+          xeDrawProfileContent(imgui_drawer(), xuid, slot, account, nullptr);
+        }
+
+        ImGui::EndGroup();
+        if (i != (users_needed_ - 1) && (i == 0 || i == 2)) {
+          ImGui::SameLine();
+        }
+      }
+
+      ImGui::Spacing();
+
+      if (ImGui::Button("Create Profile")) {
+        creating_profile_ = true;
+        ImGui::OpenPopup("Create Profile");
+        first_draw = true;
+      }
+      ImGui::Spacing();
+
+      if (creating_profile_) {
+        if (ImGui::BeginPopupModal("Create Profile", nullptr,
+                                   ImGuiWindowFlags_NoCollapse |
+                                       ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_HorizontalScrollbar)) {
+          if (first_draw) {
+            ImGui::SetKeyboardFocusHere();
+          }
+
+          ImGui::TextUnformatted("Gamertag:");
+          ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
+
+          const std::string gamertag_string = gamertag_;
+          bool valid = profile_manager->IsGamertagValid(gamertag_string);
+
+          ImGui::BeginDisabled(!valid);
+          if (ImGui::Button("Create")) {
+            profile_manager->CreateProfile(gamertag_string, false);
+            std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+            ImGui::CloseCurrentPopup();
+            creating_profile_ = false;
+            ReloadProfiles(false);
+          }
+          ImGui::EndDisabled();
+          ImGui::SameLine();
+
+          if (ImGui::Button("Cancel")) {
+            std::fill(std::begin(gamertag_), std::end(gamertag_), '\0');
+            ImGui::CloseCurrentPopup();
+            creating_profile_ = false;
+          }
+
+          ImGui::EndPopup();
+        } else {
+          creating_profile_ = false;
+        }
+      }
+
+      if (ImGui::Button("OK")) {
+        std::map<uint8_t, uint64_t> profile_map;
+        for (uint32_t i = 0; i < users_needed_; i++) {
+          uint8_t slot = chosen_slots_[i];
+          uint64_t xuid = chosen_xuids_[i];
+          if (slot != 0xFF && xuid != 0) {
+            profile_map[slot] = xuid;
+          }
+        }
+        profile_manager->LoginMultiple(profile_map);
+
+        ImGui::CloseCurrentPopup();
+        Close();
+      }
+      ImGui::SameLine();
+
+      if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+        Close();
+      }
+
+      ImGui::Spacing();
+      ImGui::Spacing();
+      ImGui::EndPopup();
+    } else {
+      Close();
+    }
+  }
+
+  void ReloadProfiles(bool first_draw) {
+    auto profile_manager = kernel_state()->xam_state()->profile_manager();
+    auto profiles = profile_manager->GetProfiles();
+
+    profile_data_.clear();
+    for (auto& [xuid, account] : *profiles) {
+      profile_data_.push_back({xuid, account.GetGamertagString()});
+    }
+
+    if (first_draw) {
+      // If only one user is requested, request last used controller to sign in.
+      if (users_needed_ == 1) {
+        chosen_slots_[0] = last_user_;
+      } else {
+        for (uint32_t i = 0; i < users_needed_; i++) {
+          // TODO: Not sure about this, needs testing on real hardware.
+          chosen_slots_[i] = i;
+        }
+      }
+
+      // Default profile selection to profile that is already signed in.
+      for (auto& elem : profile_data_) {
+        uint64_t xuid = elem.first;
+        uint8_t slot = profile_manager->GetUserIndexAssignedToProfile(xuid);
+        for (uint32_t j = 0; j < users_needed_; j++) {
+          if (chosen_slots_[j] != 0xFF && slot == chosen_slots_[j]) {
+            chosen_xuids_[j] = xuid;
+          }
+        }
+      }
+    }
+  }
+
+ private:
+  bool has_opened_ = false;
+  std::string title_;
+  uint32_t users_needed_ = 1;
+  uint32_t last_user_ = 0;
+
+  std::vector<std::pair<uint8_t, std::string>> slot_data_;
+  std::vector<std::pair<uint64_t, std::string>> profile_data_;
+  uint8_t chosen_slots_[XUserMaxUserCount] = {};
+  uint64_t chosen_xuids_[XUserMaxUserCount] = {};
+
+  bool creating_profile_ = false;
+  char gamertag_[16] = "";
+};
+
+dword_result_t XamShowSigninUI_entry(dword_t users_needed, dword_t unk_mask) {
+  // Mask values vary. Probably matching user types? Local/remote?
+  // Games seem to sit and loop until we trigger sign in notification.
+  if (users_needed != 1 && users_needed != 2 && users_needed != 4) {
+    return X_ERROR_INVALID_PARAMETER;
+  }
+
+  if (cvars::headless) {
+    return xeXamDispatchHeadlessAsync([users_needed]() {
+      std::map<uint8_t, uint64_t> xuids;
+
+      for (uint32_t i = 0; i < XUserMaxUserCount; i++) {
+        UserProfile* profile = kernel_state()->xam_state()->GetUserProfile(i);
+        if (profile) {
+          xuids[i] = profile->xuid();
+          if (xuids.size() >= users_needed) break;
+        }
+      }
+
+      kernel_state()->xam_state()->profile_manager()->LoginMultiple(xuids);
+    });
+  }
+
+  auto close = [](SigninDialog* dialog) -> void {};
+
+  const Emulator* emulator = kernel_state()->emulator();
+  ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  return xeXamDispatchDialogAsync<SigninDialog>(
+      new SigninDialog(imgui_drawer, users_needed), close);
+}
+DECLARE_XAM_EXPORT1(XamShowSigninUI, kUserProfiles, kImplemented);
 
 }  // namespace xam
 }  // namespace kernel

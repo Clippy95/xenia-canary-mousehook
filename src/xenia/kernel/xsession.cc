@@ -306,8 +306,10 @@ X_RESULT XSession::JoinSession(XSessionJoin* data) {
       bool is_local_member = IsMemberLocallySignedIn(xuid, user_index);
 
       if (is_local_member) {
-        const auto profile = kernel_state()->xam_state()->GetUserProfile(xuid);
-        member->UserIndex = profile->index();
+        const auto profile_manager =
+            kernel_state()->xam_state()->profile_manager();
+        member->UserIndex =
+            profile_manager->GetUserIndexAssignedToProfile(xuid);
 
         local_details_.ActualMemberCount = std::min<int32_t>(
             X_USER_MAX_USERS, local_details_.ActualMemberCount + 1);

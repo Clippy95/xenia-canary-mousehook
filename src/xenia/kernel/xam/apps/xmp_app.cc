@@ -12,25 +12,17 @@
 
 #include "xenia/base/logging.h"
 #include "xenia/base/threading.h"
+#include "xenia/emulator.h"
 #include "xenia/xbox.h"
+
+#include "xenia/apu/audio_media_player.h"
 
 namespace xe {
 namespace kernel {
 namespace xam {
 namespace apps {
 
-XmpApp::XmpApp(KernelState* kernel_state)
-    : App(kernel_state, 0xFA),
-      state_(State::kIdle),
-      playback_client_(PlaybackClient::kTitle),
-      playback_mode_(PlaybackMode::kUnknown),
-      repeat_mode_(RepeatMode::kUnknown),
-      unknown_flags_(0),
-      volume_(1.0f),
-      active_playlist_(nullptr),
-      active_song_index_(0),
-      next_playlist_handle_(1),
-      next_song_handle_(1) {}
+XmpApp::XmpApp(KernelState* kernel_state) : App(kernel_state, 0xFA) {}
 
 X_HRESULT XmpApp::XMPGetStatus(uint32_t state_ptr) {
   if (!XThread::GetCurrentThread()->main_thread()) {
@@ -39,9 +31,11 @@ X_HRESULT XmpApp::XMPGetStatus(uint32_t state_ptr) {
     xe::threading::Sleep(std::chrono::milliseconds(1));
   }
 
-  XELOGD("XMPGetStatus({:08X})", state_ptr);
-  xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(state_ptr),
-                               static_cast<uint32_t>(state_));
+  const uint32_t state = static_cast<uint32_t>(
+      kernel_state_->emulator()->audio_media_player()->GetState());
+
+  XELOGD("XMPGetStatus({:08X}) -> {:d}", state_ptr, state);
+  xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(state_ptr), state);
   return X_E_SUCCESS;
 }
 
@@ -54,40 +48,41 @@ X_HRESULT XmpApp::XMPCreateTitlePlaylist(
       "{:08X})",
       songs_ptr, song_count, playlist_name_ptr, xe::to_utf8(playlist_name),
       flags, out_song_handles, out_playlist_handle);
+
   auto playlist = std::make_unique<Playlist>();
   playlist->handle = ++next_playlist_handle_;
   playlist->name = playlist_name;
   playlist->flags = flags;
   if (songs_ptr) {
+    XMP_SONGDESCRIPTOR* song_descriptor =
+        memory_->TranslateVirtual<XMP_SONGDESCRIPTOR*>(songs_ptr);
+
     for (uint32_t i = 0; i < song_count; ++i) {
       auto song = std::make_unique<Song>();
       song->handle = ++next_song_handle_;
-      uint8_t* song_base = memory_->TranslateVirtual(songs_ptr + (i * 36));
-      song->file_path =
-          xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-              xe::load_and_swap<uint32_t>(song_base + 0)));
-      song->name = xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-          xe::load_and_swap<uint32_t>(song_base + 4)));
-      song->artist =
-          xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-              xe::load_and_swap<uint32_t>(song_base + 8)));
-      song->album = xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-          xe::load_and_swap<uint32_t>(song_base + 12)));
-      song->album_artist =
-          xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-              xe::load_and_swap<uint32_t>(song_base + 16)));
-      song->genre = xe::load_and_swap<std::u16string>(memory_->TranslateVirtual(
-          xe::load_and_swap<uint32_t>(song_base + 20)));
-      song->track_number = xe::load_and_swap<uint32_t>(song_base + 24);
-      song->duration_ms = xe::load_and_swap<uint32_t>(song_base + 28);
+      song->file_path = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].file_path_ptr));
+      song->name = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].title_ptr));
+      song->artist = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].artist_ptr));
+      song->album = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].album_ptr));
+      song->album_artist = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].album_artist_ptr));
+      song->genre = xe::load_and_swap<std::u16string>(
+          memory_->TranslateVirtual(song_descriptor[i].genre_ptr));
+      song->track_number = song_descriptor[i].track_number;
+      song->duration_ms = song_descriptor[i].duration;
       song->format = static_cast<Song::Format>(
-          xe::load_and_swap<uint32_t>(song_base + 32));
+          xe::byte_swap<uint32_t>(song_descriptor[i].song_format));
+
       if (out_song_handles) {
         xe::store_and_swap<uint32_t>(
             memory_->TranslateVirtual(out_song_handles + (i * 4)),
             song->handle);
       }
-      playlist->songs.emplace_back(std::move(song));
+      playlist->songs.push_back(std::move(song));
     }
   }
   if (out_playlist_handle) {
@@ -95,54 +90,24 @@ X_HRESULT XmpApp::XMPCreateTitlePlaylist(
                                  playlist->handle);
   }
 
-  auto global_lock = global_critical_region_.Acquire();
-  playlists_.insert({playlist->handle, playlist.get()});
-  playlist.release();
+  kernel_state_->emulator()->audio_media_player()->AddPlaylist(
+      next_playlist_handle_, std::move(playlist));
+
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPDeleteTitlePlaylist(uint32_t playlist_handle) {
   XELOGD("XMPDeleteTitlePlaylist({:08X})", playlist_handle);
-  auto global_lock = global_critical_region_.Acquire();
-  auto it = playlists_.find(playlist_handle);
-  if (it == playlists_.end()) {
-    XELOGE("Playlist {:08X} not found", playlist_handle);
-    return X_E_NOTFOUND;
-  }
-  auto playlist = it->second;
-  if (playlist == active_playlist_) {
-    XMPStop(0);
-  }
-  playlists_.erase(it);
-  delete playlist;
+  kernel_state_->emulator()->audio_media_player()->RemovePlaylist(
+      playlist_handle);
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPPlayTitlePlaylist(uint32_t playlist_handle,
                                        uint32_t song_handle) {
   XELOGD("XMPPlayTitlePlaylist({:08X}, {:08X})", playlist_handle, song_handle);
-  Playlist* playlist = nullptr;
-  {
-    auto global_lock = global_critical_region_.Acquire();
-    auto it = playlists_.find(playlist_handle);
-    if (it == playlists_.end()) {
-      XELOGE("Playlist {:08X} not found", playlist_handle);
-      return X_E_NOTFOUND;
-    }
-    playlist = it->second;
-  }
-
-  if (playback_client_ == PlaybackClient::kSystem) {
-    XELOGW("XMPPlayTitlePlaylist: System playback is enabled!");
-    return X_E_SUCCESS;
-  }
-
-  // Start playlist?
-  XELOGW("Playlist playback not supported");
-  active_playlist_ = playlist;
-  active_song_index_ = 0;
-  state_ = State::kPlaying;
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Play(playlist_handle,
+                                                        song_handle, false);
   kernel_state_->BroadcastNotification(kNotificationXmpPlaybackBehaviorChanged,
                                        1);
   return X_E_SUCCESS;
@@ -150,62 +115,33 @@ X_HRESULT XmpApp::XMPPlayTitlePlaylist(uint32_t playlist_handle,
 
 X_HRESULT XmpApp::XMPContinue() {
   XELOGD("XMPContinue()");
-  if (state_ == State::kPaused) {
-    state_ = State::kPlaying;
-  }
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Continue();
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPStop(uint32_t unk) {
   assert_zero(unk);
   XELOGD("XMPStop({:08X})", unk);
-  active_playlist_ = nullptr;  // ?
-  active_song_index_ = 0;
-  state_ = State::kIdle;
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Stop(true, false);
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPPause() {
   XELOGD("XMPPause()");
-  if (state_ == State::kPlaying) {
-    state_ = State::kPaused;
-  }
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Pause();
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPNext() {
   XELOGD("XMPNext()");
-  if (!active_playlist_) {
-    return X_E_NOTFOUND;
-  }
-  state_ = State::kPlaying;
-  active_song_index_ =
-      (active_song_index_ + 1) % active_playlist_->songs.size();
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Next();
   return X_E_SUCCESS;
 }
 
 X_HRESULT XmpApp::XMPPrevious() {
   XELOGD("XMPPrevious()");
-  if (!active_playlist_) {
-    return X_E_NOTFOUND;
-  }
-  state_ = State::kPlaying;
-  if (!active_song_index_) {
-    active_song_index_ = static_cast<int>(active_playlist_->songs.size()) - 1;
-  } else {
-    --active_song_index_;
-  }
-  OnStateChanged();
+  kernel_state_->emulator()->audio_media_player()->Previous();
   return X_E_SUCCESS;
-}
-
-void XmpApp::OnStateChanged() {
-  kernel_state_->BroadcastNotification(kNotificationXmpStateChanged,
-                                       static_cast<uint32_t>(state_));
 }
 
 X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
@@ -269,9 +205,14 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGD("XMPSetPlaybackBehavior({:08X}, {:08X}, {:08X})",
              uint32_t(args->playback_mode), uint32_t(args->repeat_mode),
              uint32_t(args->flags));
-      playback_mode_ = static_cast<PlaybackMode>(uint32_t(args->playback_mode));
-      repeat_mode_ = static_cast<RepeatMode>(uint32_t(args->repeat_mode));
-      unknown_flags_ = args->flags;
+
+      kernel_state_->emulator()->audio_media_player()->SetPlaybackMode(
+          static_cast<PlaybackMode>(uint32_t(args->playback_mode)));
+      kernel_state_->emulator()->audio_media_player()->SetRepeatMode(
+          static_cast<RepeatMode>(uint32_t(args->repeat_mode)));
+      kernel_state_->emulator()->audio_media_player()->SetPlaybackFlags(
+          static_cast<PlaybackFlags>(uint32_t(args->flags)));
+
       kernel_state_->BroadcastNotification(
           kNotificationXmpPlaybackBehaviorChanged, 0);
       return X_E_SUCCESS;
@@ -294,8 +235,10 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       assert_true(args->xmp_client == 0x00000002);
       XELOGD("XMPGetVolume({:08X})", uint32_t(args->volume_ptr));
-      xe::store_and_swap<float>(memory_->TranslateVirtual(args->volume_ptr),
-                                volume_);
+
+      xe::store_and_swap<float>(
+          memory_->TranslateVirtual(args->volume_ptr),
+          kernel_state_->emulator()->audio_media_player()->GetVolume());
       return X_E_SUCCESS;
     }
     case 0x0007000C: {
@@ -307,8 +250,9 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       static_assert_size(decltype(*args), 8);
 
       assert_true(args->xmp_client == 0x00000002);
-      XELOGD("XMPSetVolume({:g})", float(args->value));
-      volume_ = args->value;
+      XELOGD("XMPSetVolume({:d}, {:g})", args->xmp_client, float(args->value));
+      kernel_state_->emulator()->audio_media_player()->SetVolume(
+          float(args->value));
       return X_E_SUCCESS;
     }
     case 0x0007000D: {
@@ -338,9 +282,7 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         playlist_name = xe::load_and_swap<std::u16string>(
             memory_->TranslateVirtual(args->playlist_name_ptr));
       }
-      // dummy_alloc_ptr is the result of a XamAlloc of storage_size.
-      assert_true(uint32_t(args->storage_size) ==
-                  4 + uint32_t(args->song_count) * 128);
+
       return XMPCreateTitlePlaylist(args->songs_ptr, args->song_count,
                                     args->playlist_name_ptr, playlist_name,
                                     args->flags, args->song_handles_ptr,
@@ -355,26 +297,31 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       }* args = memory_->TranslateVirtual<decltype(args)>(buffer_ptr);
       static_assert_size(decltype(*args), 12);
 
-      auto info = memory_->TranslateVirtual(args->info_ptr);
+      auto info = memory_->TranslateVirtual<XMP_SONGINFO*>(args->info_ptr);
       assert_true(args->xmp_client == 0x00000002);
       assert_zero(args->unk_ptr);
-      XELOGE("XMPGetInfo?({:08X}, {:08X})", uint32_t(args->unk_ptr),
+      XELOGE("XMPGetCurrentSong({:08X}, {:08X})", uint32_t(args->unk_ptr),
              uint32_t(args->info_ptr));
-      if (!active_playlist_) {
+
+      Song* current_song =
+          kernel_state_->emulator()->audio_media_player()->GetCurrentSong();
+
+      if (!current_song) {
         return X_E_FAIL;
       }
-      auto& song = active_playlist_->songs[active_song_index_];
-      xe::store_and_swap<uint32_t>(info + 0, song->handle);
-      xe::store_and_swap<std::u16string>(info + 4 + 572 + 0, song->name);
-      xe::store_and_swap<std::u16string>(info + 4 + 572 + 40, song->artist);
-      xe::store_and_swap<std::u16string>(info + 4 + 572 + 80, song->album);
-      xe::store_and_swap<std::u16string>(info + 4 + 572 + 120,
-                                         song->album_artist);
-      xe::store_and_swap<std::u16string>(info + 4 + 572 + 160, song->genre);
-      xe::store_and_swap<uint32_t>(info + 4 + 572 + 200, song->track_number);
-      xe::store_and_swap<uint32_t>(info + 4 + 572 + 204, song->duration_ms);
-      xe::store_and_swap<uint32_t>(info + 4 + 572 + 208,
-                                   static_cast<uint32_t>(song->format));
+
+      memset(info, 0, sizeof(XMP_SONGINFO));
+
+      info->handle = current_song->handle;
+      xe::store_and_swap<std::u16string>(info->title, current_song->name);
+      xe::store_and_swap<std::u16string>(info->artist, current_song->artist);
+      xe::store_and_swap<std::u16string>(info->album, current_song->album);
+      xe::store_and_swap<std::u16string>(info->album_artist,
+                                         current_song->album_artist);
+      xe::store_and_swap<std::u16string>(info->genre, current_song->genre);
+      info->track_number = current_song->track_number;
+      info->duration = current_song->duration_ms;
+      info->song_format = static_cast<uint32_t>(current_song->format);
       return X_E_SUCCESS;
     }
     case 0x00070013: {
@@ -407,9 +354,14 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGD("XMPSetPlaybackController({:08X}, {:08X})",
              uint32_t(args->controller), uint32_t(args->playback_client));
 
-      playback_client_ = PlaybackClient(uint32_t(args->playback_client));
+      kernel_state_->emulator()->audio_media_player()->SetPlaybackClient(
+          PlaybackClient(uint32_t(args->playback_client)));
+
       kernel_state_->BroadcastNotification(
-          kNotificationXmpPlaybackControllerChanged, !args->playback_client);
+          kNotificationXmpPlaybackControllerChanged,
+          kernel_state_->emulator()
+              ->audio_media_player()
+              ->IsTitleInPlaybackControl());
       return X_E_SUCCESS;
     }
     case 0x0007001B: {
@@ -451,7 +403,7 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         xe::be<uint32_t> xmp_client;
         xe::be<uint32_t> playback_mode_ptr;
         xe::be<uint32_t> repeat_mode_ptr;
-        xe::be<uint32_t> unk3_ptr;
+        xe::be<uint32_t> playback_flags_ptr;
       }* args = memory_->TranslateVirtual<decltype(args)>(buffer_ptr);
       static_assert_size(decltype(*args), 16);
 
@@ -459,20 +411,27 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                   args->xmp_client == 0x00000000);
       XELOGD("XMPGetPlaybackBehavior({:08X}, {:08X}, {:08X})",
              uint32_t(args->playback_mode_ptr), uint32_t(args->repeat_mode_ptr),
-             uint32_t(args->unk3_ptr));
+             uint32_t(args->playback_flags_ptr));
       if (args->playback_mode_ptr) {
         xe::store_and_swap<uint32_t>(
             memory_->TranslateVirtual(args->playback_mode_ptr),
-            static_cast<uint32_t>(playback_mode_));
+            static_cast<uint32_t>(kernel_state_->emulator()
+                                      ->audio_media_player()
+                                      ->GetPlaybackMode()));
       }
       if (args->repeat_mode_ptr) {
         xe::store_and_swap<uint32_t>(
             memory_->TranslateVirtual(args->repeat_mode_ptr),
-            static_cast<uint32_t>(repeat_mode_));
+            static_cast<uint32_t>(kernel_state_->emulator()
+                                      ->audio_media_player()
+                                      ->GetRepeatMode()));
       }
-      if (args->unk3_ptr) {
-        xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->unk3_ptr),
-                                     unknown_flags_);
+      if (args->playback_flags_ptr) {
+        xe::store_and_swap<uint32_t>(
+            memory_->TranslateVirtual(args->playback_flags_ptr),
+            static_cast<uint32_t>(kernel_state_->emulator()
+                                      ->audio_media_player()
+                                      ->GetPlaybackFlags()));
       }
       return X_E_SUCCESS;
     }
@@ -497,7 +456,7 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                   args->xmp_client == 0x00000000);
       // We don't use the storage, so just fudge the number.
       xe::store_and_swap<uint32_t>(memory_->TranslateVirtual(args->size_ptr),
-                                   4 + uint32_t(args->song_count) * 128);
+                                   args->song_count * 0x3E8 + 0x88);
       return X_E_SUCCESS;
     }
     case 0x0007002F: {
@@ -506,10 +465,22 @@ X_HRESULT XmpApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return X_E_FAIL;
     }
     case 0x0007003D: {
-      // XMPCaptureOutput - not sure how this works :/
-      XELOGD("XMPCaptureOutput(...)");
-      assert_always("XMP output not unimplemented");
-      return X_E_FAIL;
+      // XMPCaptureOutput
+      assert_true(!buffer_length || buffer_length == 16);
+      struct {
+        xe::be<uint32_t> xmp_client;
+        xe::be<uint32_t> callback;
+        xe::be<uint32_t> context;
+        xe::be<uint32_t> title_render;
+      }* args = memory_->TranslateVirtual<decltype(args)>(buffer_ptr);
+      static_assert_size(decltype(*args), 16);
+
+      XELOGD("XMPCaptureOutput({:08X}, {:08X}, {:08X}, {:08X})",
+             args->xmp_client, args->callback, args->context,
+             args->title_render);
+      kernel_state_->emulator()->audio_media_player()->SetCaptureCallback(
+          args->callback, args->context, static_cast<bool>(args->title_render));
+      return X_E_SUCCESS;
     }
     case 0x00070044: {
       // Called on the start up of all dashboard versions before kinect

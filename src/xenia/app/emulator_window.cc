@@ -37,7 +37,9 @@
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/graphics_system.h"
 #include "xenia/hid/input_system.h"
+#include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_module.h"
+#include "xenia/kernel/xam/xam_state.h"
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/graphics_provider.h"
 #include "xenia/ui/imgui_dialog.h"
@@ -158,6 +160,14 @@ DEFINE_int32(recent_titles_entry_amount, 10,
              "General");
 
 namespace xe {
+namespace kernel {
+namespace xam {
+extern std::atomic<int> xam_dialogs_shown_;
+}
+}  // namespace kernel
+}  // namespace xe
+
+namespace xe {
 namespace app {
 
 using xe::ui::FileDropEvent;
@@ -260,6 +270,14 @@ void EmulatorWindow::ShutdownGraphicsSystemPresenterPainting() {
 }
 
 void EmulatorWindow::OnEmulatorInitialized() {
+  if (!emulator_->kernel_state()
+           ->xam_state()
+           ->profile_manager()
+           ->GetProfilesCount()) {
+    new NoProfileDialog(imgui_drawer_.get(), this);
+    disable_hotkeys_ = true;
+  }
+
   emulator_initialized_ = true;
   window_->SetMainMenuEnabled(true);
   // When the user can see that the emulator isn't initializing anymore (the
@@ -314,6 +332,7 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
   // In the top-left corner so it's close to the menu bar from where it was
   // opened.
   // Origin Y coordinate 20 was taken from the Dear ImGui demo.
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
   ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSize(ImVec2(20, 20), ImGuiCond_FirstUseEver);
   // Alpha from Dear ImGui tooltips (0.35 from the overlay provides too low
@@ -328,6 +347,8 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
     ImGui::End();
     return;
   }
+
+  ImGui::PopStyleVar();
   // Even if the close button has been pressed, still paint everything not to
   // have one frame with an empty window.
 
@@ -347,11 +368,11 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
       ImGui::RadioButton("None", &new_swap_post_effect_index,
                          int(gpu::CommandProcessor::SwapPostEffect::kNone));
       ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing 3.11 (FXAA), normal quality",
+          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Normal Quality]",
           &new_swap_post_effect_index,
           int(gpu::CommandProcessor::SwapPostEffect::kFxaa));
       ImGui::RadioButton(
-          "NVIDIA Fast Approximate Anti-Aliasing 3.11 (FXAA), extreme quality",
+          "NVIDIA Fast Approximate Anti-Aliasing (FXAA) [Extreme Quality]",
           &new_swap_post_effect_index,
           int(gpu::CommandProcessor::SwapPostEffect::kFxaaExtreme));
       gpu::CommandProcessor::SwapPostEffect new_swap_post_effect =
@@ -385,7 +406,7 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
       // Filtering effect.
       int new_effect_index = int(new_presenter_config.GetEffect());
       ImGui::RadioButton(
-          "None / bilinear", &new_effect_index,
+          "None / Bilinear", &new_effect_index,
           int(ui::Presenter::GuestOutputPaintConfig::Effect::kBilinear));
       ImGui::RadioButton(
           "AMD FidelityFX Contrast Adaptive Sharpening (CAS)",
@@ -459,8 +480,8 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
               new_presenter_config.GetFsrSharpnessReduction();
           ImGui::TextUnformatted(
               "FSR sharpness reduction when upscaling (lower is sharper):");
-          const auto label =
-              fmt::format("{:.3f} stops", fsr_sharpness_reduction);
+          const auto label = fmt::format(
+              "{} %%", static_cast<int>(fsr_sharpness_reduction * 100));
           // Power 2.0 scaling as the reduction is in stops, used in exp2.
           fsr_sharpness_reduction = sqrt(2.f * fsr_sharpness_reduction);
           ImGui::SliderFloat(
@@ -487,11 +508,13 @@ void EmulatorWindow::DisplayConfigDialog::OnDraw(ImGuiIO& io) {
                 ? "CAS additional sharpness when not upscaling (higher is "
                   "sharper):"
                 : "CAS additional sharpness (higher is sharper):");
+        const auto label = fmt::format(
+            "{} %%", static_cast<int>(cas_additional_sharpness * 100));
         ImGui::SliderFloat(
             "##CASAdditionalSharpness", &cas_additional_sharpness,
             ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMin,
             ui::Presenter::GuestOutputPaintConfig::kCasAdditionalSharpnessMax,
-            "%.3f");
+            label.c_str(), ImGuiSliderFlags_NoInput);
         ImGui::SameLine();
         if (ImGui::Button("Reset##ResetCASAdditionalSharpness")) {
           cas_additional_sharpness = ui::Presenter::GuestOutputPaintConfig ::
@@ -605,6 +628,15 @@ bool EmulatorWindow::Initialize() {
                          [this]() { window_->RequestClose(); }));
   }
   main_menu->AddChild(std::move(file_menu));
+
+  // Profile Menu
+  auto profile_menu = MenuItem::Create(MenuItem::Type::kPopup, "&Profile");
+  {
+    profile_menu->AddChild(MenuItem::Create(
+        MenuItem::Type::kString, "&Show Profile Menu", "",
+        std::bind(&EmulatorWindow::ToggleProfilesConfigDialog, this)));
+  }
+  main_menu->AddChild(std::move(profile_menu));
 
   // CPU menu.
   auto cpu_menu = MenuItem::Create(MenuItem::Type::kPopup, "&CPU");
@@ -742,8 +774,8 @@ bool EmulatorWindow::Initialize() {
     help_menu->AddChild(MenuItem::Create(
         MenuItem::Type::kString, "Recent changes on GitHub...", []() {
           LaunchWebBrowser(
-              "https://github.com/xenia-project/xenia/compare/" XE_BUILD_COMMIT
-              "..." XE_BUILD_BRANCH);
+              "https://github.com/xenia-canary/xenia-canary/"
+              "compare/" XE_BUILD_COMMIT "..." XE_BUILD_BRANCH);
         }));
     help_menu->AddChild(MenuItem::Create(MenuItem::Type::kSeparator));
     help_menu->AddChild(MenuItem::Create(
@@ -948,7 +980,9 @@ void EmulatorWindow::OnKeyDown(ui::KeyEvent& e) {
 }
 
 void EmulatorWindow::OnMouseDown(const ui::MouseEvent& e) {
+  // if (e.button() == ui::MouseEvent::Button::kLeft) {
   ToggleFullscreenOnDoubleClick();
+  // }
 }
 
 void EmulatorWindow::OnMouseUp(const ui::MouseEvent& e) {
@@ -1155,6 +1189,10 @@ void EmulatorWindow::InstallContent() {
     summary += "\n";
   }
 
+  if (content_installation_details.count(XContentType::kProfile)) {
+    emulator_->kernel_state()->xam_state()->profile_manager()->ReloadProfiles();
+  }
+
   xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
                                       "Content Installation Summary", summary);
 }
@@ -1347,24 +1385,13 @@ void EmulatorWindow::CreateZarchive() {
 }
 
 void EmulatorWindow::ShowContentDirectory() {
-  std::filesystem::path target_path;
-
   auto content_root = emulator_->content_root();
-  if (!emulator_->is_title_open() || !emulator_->kernel_state()) {
-    target_path = content_root;
-  } else {
-    // TODO(gibbed): expose this via ContentManager?
-    auto title_id =
-        fmt::format("{:08X}", emulator_->kernel_state()->title_id());
-    auto package_root = content_root / title_id;
-    target_path = package_root;
+
+  if (!std::filesystem::exists(content_root)) {
+    std::filesystem::create_directories(content_root);
   }
 
-  if (!std::filesystem::exists(target_path)) {
-    std::filesystem::create_directories(target_path);
-  }
-
-  LaunchFileExplorer(target_path);
+  LaunchFileExplorer(content_root);
 }
 
 void EmulatorWindow::DumpXLast() { emulator()->DumpXLast(); }
@@ -1443,6 +1470,23 @@ void EmulatorWindow::ToggleDisplayConfigDialog() {
   }
 }
 
+void EmulatorWindow::ToggleProfilesConfigDialog() {
+  if (!profile_config_dialog_) {
+    disable_hotkeys_ = true;
+    emulator_->kernel_state()->BroadcastNotification(kXNotificationIDSystemUI,
+                                                     1);
+    profile_config_dialog_ =
+        std::make_unique<ProfileConfigDialog>(imgui_drawer_.get(), this);
+    kernel::xam::xam_dialogs_shown_++;
+  } else {
+    disable_hotkeys_ = false;
+    emulator_->kernel_state()->BroadcastNotification(kXNotificationIDSystemUI,
+                                                     0);
+    profile_config_dialog_.reset();
+    kernel::xam::xam_dialogs_shown_--;
+  }
+}
+
 void EmulatorWindow::ToggleControllerVibration() {
   auto input_sys = emulator()->input_system();
   if (input_sys) {
@@ -1454,7 +1498,7 @@ void EmulatorWindow::ToggleControllerVibration() {
 
 void EmulatorWindow::ShowCompatibility() {
   const std::string_view base_url =
-      "https://github.com/xenia-project/game-compatibility/issues";
+      "https://github.com/xenia-canary/game-compatibility/issues";
   std::string url;
   // Avoid searching for a title ID of "00000000".
   uint32_t title_id = emulator_->title_id();
@@ -1467,16 +1511,16 @@ void EmulatorWindow::ShowCompatibility() {
 }
 
 void EmulatorWindow::ShowFAQ() {
-  LaunchWebBrowser("https://github.com/xenia-project/xenia/wiki/FAQ");
+  LaunchWebBrowser("https://github.com/xenia-canary/xenia-canary/wiki/FAQ");
 }
 
 void EmulatorWindow::ShowBuildCommit() {
 #ifdef XE_BUILD_IS_PR
   LaunchWebBrowser(
-      "https://github.com/xenia-project/xenia/pull/" XE_BUILD_PR_NUMBER);
+      "https://github.com/xenia-canary/xenia-canary/pull/" XE_BUILD_PR_NUMBER);
 #else
   LaunchWebBrowser(
-      "https://github.com/xenia-project/xenia/commit/" XE_BUILD_COMMIT);
+      "https://github.com/xenia-canary/xenia-canary/commit/" XE_BUILD_COMMIT);
 #endif
 }
 
@@ -1640,7 +1684,13 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
   // Default return value
   EmulatorWindow::ControllerHotKey Unknown_hotkey = {};
 
-  if (buttons == 0) return Unknown_hotkey;
+  if (buttons == 0) {
+    return Unknown_hotkey;
+  }
+
+  if (disable_hotkeys_.load()) {
+    return Unknown_hotkey;
+  }
 
   // Hotkey cool-down to prevent toggling too fast
   const std::chrono::milliseconds delay(75);
@@ -1851,7 +1901,7 @@ void EmulatorWindow::GamepadHotKeys() {
     while (true) {
       auto input_lock = input_sys->lock();
 
-      for (uint32_t user_index = 0; user_index < X_USER_MAX_USERS;
+      for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
            ++user_index) {
         X_RESULT result = input_sys->GetState(user_index, &state);
 
@@ -2114,6 +2164,17 @@ xe::X_STATUS EmulatorWindow::RunTitle(
   }
 
   auto result = emulator_->LaunchPath(abs_path);
+
+  disable_hotkeys_ = false;
+
+  if (profile_config_dialog_) {
+    profile_config_dialog_.reset();
+    kernel::xam::xam_dialogs_shown_--;
+  }
+
+  if (display_config_dialog_) {
+    display_config_dialog_.reset();
+  }
 
   imgui_drawer_.get()->ClearDialogs();
 

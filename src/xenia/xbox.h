@@ -14,6 +14,7 @@
 #include <string>
 
 #include "xenia/base/memory.h"
+#include "xenia/base/string.h"
 
 // TODO(benvanik): split this header, cleanup, etc.
 // clang-format off
@@ -92,6 +93,7 @@ typedef uint32_t X_RESULT;
 #define X_ERROR_PATH_NOT_FOUND                  X_RESULT_FROM_WIN32(0x00000003L)
 #define X_ERROR_ACCESS_DENIED                   X_RESULT_FROM_WIN32(0x00000005L)
 #define X_ERROR_INVALID_HANDLE                  X_RESULT_FROM_WIN32(0x00000006L)
+#define X_ERROR_NOT_ENOUGH_MEMORY               X_RESULT_FROM_WIN32(0x00000008L)
 #define X_ERROR_NO_MORE_FILES                   X_RESULT_FROM_WIN32(0x00000012L)
 #define X_ERROR_NOT_SUPPORTED                   X_RESULT_FROM_WIN32(0x00000032L)
 #define X_ERROR_INVALID_PARAMETER               X_RESULT_FROM_WIN32(0x00000057L)
@@ -267,6 +269,12 @@ struct X_UNICODE_STRING {
   }
 };
 static_assert_size(X_UNICODE_STRING, 8);
+
+constexpr uint8_t XUserMaxUserCount = 4;
+
+constexpr uint8_t XUserIndexLatest = 0xFD;
+constexpr uint8_t XUserIndexNone = 0xFE;
+constexpr uint8_t XUserIndexAny = 0xFF;
 
 // https://github.com/ThirteenAG/Ultimate-ASI-Loader/blob/master/source/xlive/xliveless.h
 typedef uint32_t XNotificationID;
@@ -547,6 +555,84 @@ enum class XDeploymentType : uint32_t {
   kGoD = 2,
   kUnknown = 0xFF,
 };
+
+#pragma pack(push, 4)
+struct X_XAMACCOUNTINFO {
+  enum AccountReservedFlags {
+    kPasswordProtected = 0x10000000,
+    kLiveEnabled = 0x20000000,
+    kRecovering = 0x40000000,
+    kVersionMask = 0x000000FF
+  };
+
+  enum AccountUserFlags {
+    kPaymentInstrumentCreditCard = 1,
+
+    kCountryMask = 0xFF00,
+    kSubscriptionTierMask = 0xF00000,
+    kLanguageMask = 0x3E000000,
+
+    kParentalControlEnabled = 0x1000000,
+  };
+
+  enum AccountSubscriptionTier {
+    kSubscriptionTierSilver = 3,
+    kSubscriptionTierGold = 6,
+    kSubscriptionTierFamilyGold = 9
+  };
+
+  enum AccountLiveFlags { kAcctRequiresManagement = 1 };
+
+  xe::be<uint32_t> reserved_flags;
+  xe::be<uint32_t> live_flags;
+  char16_t gamertag[0x10];
+  xe::be<uint64_t> xuid_online;  // 09....
+  xe::be<uint32_t> cached_user_flags;
+  xe::be<uint32_t> network_id;
+  char passcode[4];
+  char online_domain[0x14];
+  char online_kerberos_realm[0x18];
+  char online_key[0x10];
+  char passport_membername[0x72];
+  char passport_password[0x20];
+  char owner_passport_membername[0x72];
+
+  bool IsPasscodeEnabled() {
+    return static_cast<bool>(reserved_flags &
+                             AccountReservedFlags::kPasswordProtected);
+  }
+
+  bool IsLiveEnabled() const {
+    return static_cast<bool>(reserved_flags &
+                             AccountReservedFlags::kLiveEnabled);
+  }
+
+  bool IsXUIDOffline() { return ((xuid_online >> 60) & 0xF) == 0xE; }
+  bool IsXUIDOnline() { return ((xuid_online >> 48) & 0xFFFF) == 0x9; }
+  bool IsXUIDValid() { return IsXUIDOffline() != IsXUIDOnline(); }
+  bool IsTeamXUID() {
+    return (xuid_online & 0xFF00000000000140) == 0xFE00000000000100;
+  }
+
+  uint32_t GetCountry() const {
+    return (cached_user_flags & kCountryMask) >> 8;
+  }
+
+  AccountSubscriptionTier GetSubscriptionTier() const {
+    return static_cast<AccountSubscriptionTier>(
+        (cached_user_flags & kSubscriptionTierMask) >> 20);
+  }
+
+  XLanguage GetLanguage() const {
+    return static_cast<XLanguage>((cached_user_flags & kLanguageMask) >> 25);
+  }
+
+  std::string GetGamertagString() const {
+    return xe::to_utf8(std::u16string(gamertag));
+  }
+};
+static_assert_size(X_XAMACCOUNTINFO, 0x17C);
+#pragma pack(pop)
 
 }  // namespace xe
 

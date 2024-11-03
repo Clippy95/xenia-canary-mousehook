@@ -109,6 +109,10 @@ KernelState::~KernelState() {
 KernelState* KernelState::shared() { return shared_kernel_state_; }
 
 uint32_t KernelState::title_id() const {
+  if (!executable_module_) {
+    return 0;
+  }
+
   assert_not_null(executable_module_);
 
   xex2_opt_execution_info* exec_info = 0;
@@ -580,7 +584,7 @@ std::vector<xam::XCONTENT_AGGREGATE_DATA> KernelState::FindTitleUpdate(
   }
 
   return xam_state_->content_manager()->ListContent(
-      1, xe::XContentType::kInstaller, title_id);
+      1, 0, title_id, xe::XContentType::kInstaller);
 }
 
 const object_ref<UserModule> KernelState::LoadTitleUpdate(
@@ -591,8 +595,9 @@ const object_ref<UserModule> KernelState::LoadTitleUpdate(
     disc_number = module->disc_number();
   }
 
-  X_RESULT open_status =
-      content_manager()->OpenContent("UPDATE", *title_update, disc_number);
+  uint32_t content_license = 0;
+  X_RESULT open_status = content_manager()->OpenContent(
+      "UPDATE", 0, *title_update, content_license, disc_number);
 
   // Use the corresponding patch for the launch module
   std::filesystem::path patch_xexp;

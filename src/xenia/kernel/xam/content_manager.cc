@@ -22,13 +22,13 @@
 #include "xenia/kernel/xobject.h"
 #include "xenia/vfs/devices/host_path_device.h"
 
+DECLARE_int32(license_mask);
+
 namespace xe {
 namespace kernel {
 namespace xam {
 
 static const char* kThumbnailFileName = "__thumbnail.png";
-
-static const char* kGameUserContentDirName = "profile";
 static const char* kGameContentHeaderDirName = "Headers";
 
 static int content_device_id_ = 0;
@@ -55,6 +55,26 @@ ContentPackage::~ContentPackage() {
   fs->UnregisterDevice(device_path_);
 }
 
+void ContentPackage::LoadPackageLicenseMask(
+    const std::filesystem::path header_path) {
+  license_ = cvars::license_mask;
+
+  if (!std::filesystem::exists(header_path)) {
+    return;
+  }
+
+  auto file = xe::filesystem::OpenFile(header_path, "rb");
+  auto file_size = std::filesystem::file_size(header_path);
+  if (file_size < sizeof(XCONTENT_AGGREGATE_DATA) + sizeof(license_)) {
+    fclose(file);
+    return;
+  }
+
+  fseek(file, sizeof(XCONTENT_AGGREGATE_DATA), SEEK_SET);
+  size_t result = fread(&license_, 1, sizeof(license_), file);
+  fclose(file);
+}
+
 ContentManager::ContentManager(KernelState* kernel_state,
                                const std::filesystem::path& root_path)
     : kernel_state_(kernel_state), root_path_(root_path) {}
@@ -62,24 +82,31 @@ ContentManager::ContentManager(KernelState* kernel_state,
 ContentManager::~ContentManager() = default;
 
 std::filesystem::path ContentManager::ResolvePackageRoot(
-    XContentType content_type, uint32_t title_id) {
+    uint64_t xuid, uint32_t title_id, XContentType content_type) const {
   if (title_id == kCurrentlyRunningTitleId) {
     title_id = kernel_state_->title_id();
   }
+
+  auto xuid_str = fmt::format("{:016X}", xuid);
   auto title_id_str = fmt::format("{:08X}", title_id);
-  auto content_type_str = fmt::format("{:08X}", uint32_t(content_type));
+  auto content_type_str =
+      fmt::format("{:08X}", static_cast<uint32_t>(content_type));
 
   // Package root path:
   // content_root/title_id/content_type/
-  return root_path_ / title_id_str / content_type_str;
+  return root_path_ / xuid_str / title_id_str / content_type_str;
 }
 
 std::filesystem::path ContentManager::ResolvePackagePath(
-    const XCONTENT_AGGREGATE_DATA& data, const uint32_t disc_number) {
+    const uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data,
+    const uint32_t disc_number) {
   // Content path:
   // content_root/title_id/content_type/data_file_name/
   auto get_package_path = [&, data, disc_number](const uint32_t title_id) {
-    auto package_root = ResolvePackageRoot(data.content_type, title_id);
+    uint64_t used_xuid = (data.xuid != -1 && data.xuid != 0) ? data.xuid : xuid;
+
+    auto package_root =
+        ResolvePackageRoot(used_xuid, title_id, data.content_type);
     std::string final_name = xe::string_util::trim(data.file_name());
     std::filesystem::path package_path = package_root / xe::to_path(final_name);
 
@@ -91,7 +118,7 @@ std::filesystem::path ContentManager::ResolvePackagePath(
 
   if (data.content_type == XContentType::kPublisher) {
     const std::unordered_set<uint32_t> title_ids =
-        FindPublisherTitleIds(data.title_id);
+        FindPublisherTitleIds(xuid, data.title_id);
 
     for (const auto& title_id : title_ids) {
       auto package_path = get_package_path(title_id);
@@ -108,24 +135,30 @@ std::filesystem::path ContentManager::ResolvePackagePath(
 }
 
 std::filesystem::path ContentManager::ResolvePackageHeaderPath(
-    const std::string_view file_name, XContentType content_type,
-    uint32_t title_id) {
+    const std::string_view file_name, uint64_t xuid, uint32_t title_id,
+    const XContentType content_type) const {
   if (title_id == kCurrentlyRunningTitleId) {
     title_id = kernel_state_->title_id();
   }
+
+  if (content_type == XContentType::kMarketplaceContent) {
+    xuid = 0;
+  }
+
+  auto xuid_str = fmt::format("{:016X}", xuid);
   auto title_id_str = fmt::format("{:08X}", title_id);
   auto content_type_str = fmt::format("{:08X}", uint32_t(content_type));
   std::string final_name =
       xe::string_util::trim(std::string(file_name)) + ".header";
 
   // Header root path:
-  // content_root/title_id/Headers/content_type/
-  return root_path_ / title_id_str / kGameContentHeaderDirName /
+  // content_root/xuid/title_id/Headers/content_type/
+  return root_path_ / xuid_str / title_id_str / kGameContentHeaderDirName /
          content_type_str / final_name;
 }
 
 std::unordered_set<uint32_t> ContentManager::FindPublisherTitleIds(
-    uint32_t base_title_id) const {
+    const uint64_t xuid, uint32_t base_title_id) const {
   if (base_title_id == kCurrentlyRunningTitleId) {
     base_title_id = kernel_state_->title_id();
   }
@@ -134,9 +167,10 @@ std::unordered_set<uint32_t> ContentManager::FindPublisherTitleIds(
   std::string publisher_id_regex =
       fmt::format("^{:04X}.*", static_cast<uint16_t>(base_title_id >> 16));
   // Get all publisher entries
-  auto publisher_entries =
-      xe::filesystem::FilterByName(xe::filesystem::ListDirectories(root_path_),
-                                   std::regex(publisher_id_regex));
+  auto publisher_entries = xe::filesystem::FilterByName(
+      xe::filesystem::ListDirectories(root_path_ /
+                                      fmt::format("{:016X}", xuid)),
+      std::regex(publisher_id_regex));
 
   for (const auto& entry : publisher_entries) {
     std::filesystem::path path_to_publisher_dir =
@@ -159,23 +193,20 @@ std::unordered_set<uint32_t> ContentManager::FindPublisherTitleIds(
 }
 
 std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(
-    uint32_t device_id, XContentType content_type, uint32_t title_id) {
+    const uint32_t device_id, const uint64_t xuid, const uint32_t title_id,
+    const XContentType content_type) const {
   std::vector<XCONTENT_AGGREGATE_DATA> result;
-
-  if (title_id == kCurrentlyRunningTitleId) {
-    title_id = kernel_state_->title_id();
-  }
 
   std::unordered_set<uint32_t> title_ids = {title_id};
 
   if (content_type == XContentType::kPublisher) {
-    title_ids = FindPublisherTitleIds(title_id);
+    title_ids = FindPublisherTitleIds(xuid, title_id);
   }
 
   for (const uint32_t& title_id : title_ids) {
     // Search path:
-    // content_root/title_id/type_name/*
-    auto package_root = ResolvePackageRoot(content_type, title_id);
+    // content_root/xuid/title_id/type_name/*
+    auto package_root = ResolvePackageRoot(xuid, title_id, content_type);
     auto file_infos = xe::filesystem::ListFiles(package_root);
 
     for (const auto& file_info : file_infos) {
@@ -186,8 +217,8 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(
 
       XCONTENT_AGGREGATE_DATA content_data;
       if (XSUCCEEDED(ReadContentHeaderFile(xe::path_to_utf8(file_info.name),
-                                           content_type, content_data,
-                                           title_id))) {
+                                           xuid, title_id, content_type,
+                                           content_data))) {
         result.emplace_back(std::move(content_data));
       } else {
         content_data.device_id = device_id;
@@ -195,6 +226,7 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(
         content_data.set_display_name(xe::path_to_utf16(file_info.name));
         content_data.set_file_name(xe::path_to_utf8(file_info.name));
         content_data.title_id = title_id;
+        content_data.xuid = xuid;
         result.emplace_back(std::move(content_data));
       }
     }
@@ -203,9 +235,9 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(
 }
 
 std::unique_ptr<ContentPackage> ContentManager::ResolvePackage(
-    const std::string_view root_name, const XCONTENT_AGGREGATE_DATA& data,
-    const uint32_t disc_number) {
-  auto package_path = ResolvePackagePath(data, disc_number);
+    const std::string_view root_name, const uint64_t xuid,
+    const XCONTENT_AGGREGATE_DATA& data, const uint32_t disc_number) {
+  auto package_path = ResolvePackagePath(xuid, data, disc_number);
   if (!std::filesystem::exists(package_path)) {
     return nullptr;
   }
@@ -217,15 +249,24 @@ std::unique_ptr<ContentPackage> ContentManager::ResolvePackage(
   return package;
 }
 
-bool ContentManager::ContentExists(const XCONTENT_AGGREGATE_DATA& data) {
-  auto path = ResolvePackagePath(data);
+bool ContentManager::ContentExists(const uint64_t xuid,
+                                   const XCONTENT_AGGREGATE_DATA& data) {
+  auto path = ResolvePackagePath(xuid, data);
   return std::filesystem::exists(path);
 }
 
-X_RESULT ContentManager::WriteContentHeaderFile(
-    const XCONTENT_AGGREGATE_DATA* data) {
-  auto header_path = ResolvePackageHeaderPath(
-      data->file_name(), data->content_type, data->title_id);
+X_RESULT ContentManager::WriteContentHeaderFile(const uint64_t xuid,
+                                                XCONTENT_AGGREGATE_DATA data) {
+  if (data.title_id == -1) {
+    data.title_id = kernel_state_->title_id();
+  }
+  if (data.xuid == -1) {
+    data.xuid = xuid;
+  }
+  uint64_t used_xuid = (data.xuid != -1 && data.xuid != 0) ? data.xuid : xuid;
+
+  auto header_path = ResolvePackageHeaderPath(data.file_name(), used_xuid,
+                                              data.title_id, data.content_type);
   auto parent_path = header_path.parent_path();
 
   if (!std::filesystem::exists(parent_path)) {
@@ -238,19 +279,19 @@ X_RESULT ContentManager::WriteContentHeaderFile(
 
   if (std::filesystem::exists(header_path)) {
     auto file = xe::filesystem::OpenFile(header_path, "wb");
-    fwrite(data, 1, sizeof(XCONTENT_AGGREGATE_DATA), file);
+    fwrite(&data, 1, sizeof(XCONTENT_AGGREGATE_DATA), file);
     fclose(file);
     return X_STATUS_SUCCESS;
   }
   return X_STATUS_NO_SUCH_FILE;
 }
 
-X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
-                                               XContentType content_type,
-                                               XCONTENT_AGGREGATE_DATA& data,
-                                               const uint32_t title_id) {
+X_RESULT ContentManager::ReadContentHeaderFile(
+    const std::string_view file_name, const uint64_t xuid,
+    const uint32_t title_id, XContentType content_type,
+    XCONTENT_AGGREGATE_DATA& data) const {
   auto header_file_path =
-      ResolvePackageHeaderPath(file_name, content_type, title_id);
+      ResolvePackageHeaderPath(file_name, xuid, title_id, content_type);
   constexpr uint32_t header_size = sizeof(XCONTENT_AGGREGATE_DATA);
 
   if (std::filesystem::exists(header_file_path)) {
@@ -259,31 +300,26 @@ X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
     std::array<uint8_t, header_size> buffer;
 
     auto file_size = std::filesystem::file_size(header_file_path);
-    if (file_size != header_size && file_size != sizeof(XCONTENT_DATA)) {
+    if (file_size < header_size) {
       fclose(file);
       return X_STATUS_END_OF_FILE;
     }
 
-    size_t result = fread(buffer.data(), 1, file_size, file);
-    if (result != file_size) {
+    size_t result = fread(buffer.data(), 1, header_size, file);
+    if (result != header_size) {
       fclose(file);
       return X_STATUS_END_OF_FILE;
     }
+
     fclose(file);
     std::memcpy(&data, buffer.data(), buffer.size());
-    // It only reads basic info, however importing savefiles
-    // usually requires title_id to be provided
-    // Kinda simple workaround for that, but still assumption
-    data.title_id = title_id;
-    data.xuid = kernel_state_->xam_state()
-                    ->GetUserProfile(static_cast<uint32_t>(0))
-                    ->xuid();
     return X_STATUS_SUCCESS;
   }
   return X_STATUS_NO_SUCH_FILE;
 }
 
 X_RESULT ContentManager::CreateContent(const std::string_view root_name,
+                                       const uint64_t xuid,
                                        const XCONTENT_AGGREGATE_DATA& data) {
   auto global_lock = global_critical_region_.Acquire();
 
@@ -292,7 +328,7 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name,
     return X_ERROR_ALREADY_EXISTS;
   }
 
-  auto package_path = ResolvePackagePath(data);
+  auto package_path = ResolvePackagePath(xuid, data);
   if (std::filesystem::exists(package_path)) {
     // Exists, must not!
     return X_ERROR_ALREADY_EXISTS;
@@ -302,7 +338,7 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name,
     return X_ERROR_ACCESS_DENIED;
   }
 
-  auto package = ResolvePackage(root_name, data);
+  auto package = ResolvePackage(root_name, xuid, data);
   assert_not_null(package);
 
   open_packages_.insert({string_key::create(root_name), package.release()});
@@ -311,7 +347,9 @@ X_RESULT ContentManager::CreateContent(const std::string_view root_name,
 }
 
 X_RESULT ContentManager::OpenContent(const std::string_view root_name,
+                                     const uint64_t xuid,
                                      const XCONTENT_AGGREGATE_DATA& data,
+                                     uint32_t& content_license,
                                      const uint32_t disc_number) {
   auto global_lock = global_critical_region_.Acquire();
 
@@ -320,15 +358,20 @@ X_RESULT ContentManager::OpenContent(const std::string_view root_name,
     return X_ERROR_ALREADY_EXISTS;
   }
 
-  auto package_path = ResolvePackagePath(data, disc_number);
+  auto package_path = ResolvePackagePath(xuid, data, disc_number);
   if (!std::filesystem::exists(package_path)) {
     // Does not exist, must be created.
     return X_ERROR_FILE_NOT_FOUND;
   }
 
   // Open package.
-  auto package = ResolvePackage(root_name, data, disc_number);
+  auto package = ResolvePackage(root_name, xuid, data, disc_number);
   assert_not_null(package);
+
+  package->LoadPackageLicenseMask(ResolvePackageHeaderPath(
+      data.file_name(), xuid, kernel_state_->title_id(), data.content_type));
+
+  content_license = package->GetPackageLicense();
 
   open_packages_.insert({string_key::create(root_name), package.release()});
 
@@ -352,9 +395,11 @@ X_RESULT ContentManager::CloseContent(const std::string_view root_name) {
 }
 
 X_RESULT ContentManager::GetContentThumbnail(
-    const XCONTENT_AGGREGATE_DATA& data, std::vector<uint8_t>* buffer) {
+    const uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data,
+    std::vector<uint8_t>* buffer) {
   auto global_lock = global_critical_region_.Acquire();
-  auto package_path = ResolvePackagePath(data);
+
+  auto package_path = ResolvePackagePath(xuid, data);
   auto thumb_path = package_path / kThumbnailFileName;
   if (std::filesystem::exists(thumb_path)) {
     auto file = xe::filesystem::OpenFile(thumb_path, "rb");
@@ -369,9 +414,10 @@ X_RESULT ContentManager::GetContentThumbnail(
 }
 
 X_RESULT ContentManager::SetContentThumbnail(
-    const XCONTENT_AGGREGATE_DATA& data, std::vector<uint8_t> buffer) {
+    const uint64_t xuid, const XCONTENT_AGGREGATE_DATA& data,
+    std::vector<uint8_t> buffer) {
   auto global_lock = global_critical_region_.Acquire();
-  auto package_path = ResolvePackagePath(data);
+  auto package_path = ResolvePackagePath(xuid, data);
   std::filesystem::create_directories(package_path);
   if (std::filesystem::exists(package_path)) {
     auto thumb_path = package_path / kThumbnailFileName;
@@ -384,7 +430,8 @@ X_RESULT ContentManager::SetContentThumbnail(
   }
 }
 
-X_RESULT ContentManager::DeleteContent(const XCONTENT_AGGREGATE_DATA& data) {
+X_RESULT ContentManager::DeleteContent(const uint64_t xuid,
+                                       const XCONTENT_AGGREGATE_DATA& data) {
   auto global_lock = global_critical_region_.Acquire();
 
   if (IsContentOpen(data)) {
@@ -392,7 +439,7 @@ X_RESULT ContentManager::DeleteContent(const XCONTENT_AGGREGATE_DATA& data) {
     return X_ERROR_ACCESS_DENIED;
   }
 
-  auto package_path = ResolvePackagePath(data);
+  auto package_path = ResolvePackagePath(xuid, data);
   if (std::filesystem::remove_all(package_path) > 0) {
     return X_ERROR_SUCCESS;
   } else {
@@ -400,15 +447,13 @@ X_RESULT ContentManager::DeleteContent(const XCONTENT_AGGREGATE_DATA& data) {
   }
 }
 
-std::filesystem::path ContentManager::ResolveGameUserContentPath() {
+std::filesystem::path ContentManager::ResolveGameUserContentPath(
+    const uint64_t xuid) {
+  auto xuid_str = fmt::format("{:016X}", xuid);
   auto title_id = fmt::format("{:08X}", kernel_state_->title_id());
-  auto user_name = xe::to_path(kernel_state_->xam_state()
-                                   ->GetUserProfile(static_cast<uint32_t>(0))
-                                   ->name());
 
-  // Per-game per-profile data location:
-  // content_root/title_id/profile/user_name
-  return root_path_ / title_id / kGameUserContentDirName / user_name;
+  return root_path_ / xuid_str / kDashboardStringID / "00010000" / xuid_str /
+         title_id;
 }
 
 bool ContentManager::IsContentOpen(const XCONTENT_AGGREGATE_DATA& data) const {
