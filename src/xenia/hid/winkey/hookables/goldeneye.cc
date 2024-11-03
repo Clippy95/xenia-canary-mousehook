@@ -93,25 +93,29 @@ std::map<GoldeneyeGame::GameBuild, RareGameBuildAddrs> supported_builds = {
     // unfortunately gets triggered when health bar appears...
     {GoldeneyeGame::GameBuild::PerfectDark_Devkit_33,
      {0x825CBC59, 0x30303333, 0, 0, 0x82620E08, 0, 0x826284C4, 0x1A4C, 0x0,
-      {GoldeneyeGame::GameBuild::PerfectDark_Release_52,
-       {0x825EC0E5, 0x30303532, 0, 0, 0x826419C0, 0, 0x8264909C, 0x1A4C, 0x0,
-        {GoldeneyeGame::GameBuild::PerfectDark_Devkit_102,
-         {
-             0x825EC0E5, 0x30313032, 0, 0, 0x82641A80, 0, 0x82649274, 0x1A4C,
-             0x0,
-             // TODO: test these!
-             /*
-             {
-               GoldeneyeGame::GameBuild::PerfectDark_Release_104,
-                 {0x825EC0D5, 0x30313034, 0, 0, 0x82641A80, 0, 0x82649264,
-             0x1A4C, 0x0,
-             },
-             {
-               GoldeneyeGame::GameBuild::PerfectDark_Release_107,
-                 {0x825FC25D, 0x30313037, 0, 0, 0x8265A200, 0, 0x826619E4,
-             0x1A4C, 0x0,
-             },*/
-         };
+      0x14C, 0x15C, 0x1690, 0x1694, 0xCFC, 0xD00, 0x128, 0x179C, 0x14A0,
+      0x14A4}},
+    {GoldeneyeGame::GameBuild::PerfectDark_Release_52,
+     {0x825EC0E5, 0x30303532, 0, 0, 0x826419C0, 0, 0x8264909C, 0x1A4C, 0x0,
+      0x14C, 0x15C, 0x1690, 0x1694, 0xCFC, 0xD00, 0x128, 0x179C, 0x14A0,
+      0x14A4}},
+    {GoldeneyeGame::GameBuild::PerfectDark_Devkit_102,
+     {0x825EC0E5, 0x30313032, 0, 0, 0x82641A80, 0, 0x82649274, 0x1A4C, 0x0,
+      0x14C, 0x15C, 0x1690, 0x1694, 0xCFC, 0xD00, 0x128, 0x179C, 0x14A0,
+      0x14A4}},
+    // TODO: test these!
+    /*
+    {
+      GoldeneyeGame::GameBuild::PerfectDark_Release_104,
+        {0x825EC0D5, 0x30313034, 0, 0, 0x82641A80, 0, 0x82649264, 0x1A4C, 0x0,
+    0x14C, 0x15C, 0x1690, 0x1694, 0xCFC, 0xD00, 0x128, 0, 0x14A0, 0x14A4}
+    },
+    {
+      GoldeneyeGame::GameBuild::PerfectDark_Release_107,
+        {0x825FC25D, 0x30313037, 0, 0, 0x8265A200, 0, 0x826619E4, 0x1A4C, 0x0,
+    0x14C, 0x15C, 0x1690, 0x1694, 0xCFC, 0xD00, 0x128, 0, 0x14A0, 0x14A4}
+    },*/
+};
 
 bool GoldeneyeGame::IsGameSupported() {
   auto title_id = kernel_state()->title_id();
@@ -140,6 +144,7 @@ bool GoldeneyeGame::DoHooks(uint32_t user_index, RawInputState& input_state,
   if (!IsGameSupported()) {
     return false;
   }
+  auto title_id = kernel_state()->title_id();
   auto& game_addrs = supported_builds[game_build_];
 
   // Move menu selection crosshair
@@ -565,10 +570,11 @@ bool GoldeneyeGame::ModifierKeyHandler(uint32_t user_index,
 
     out_state->gamepad.thumb_lx = (int16_t)(distance * cosf(angle));
     out_state->gamepad.thumb_ly = (int16_t)(distance * sinf(angle));
-    // Return true to signal that we've handled the modifier, so default
-    // modifier won't be used
-    return true;
   }
+  // Return true to signal that we've handled the modifier, so default modifier
+  // won't be used
+  return true;
+}
 
 }  // namespace winkey
 }  // namespace hid

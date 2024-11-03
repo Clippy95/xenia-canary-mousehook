@@ -149,7 +149,7 @@ AudioMediaPlayer::AudioMediaPlayer(apu::AudioSystem* audio_system,
     : audio_system_(audio_system),
       kernel_state_(kernel_state),
       active_playlist_(nullptr),
-      active_song_(nullptr){};
+      active_song_(nullptr) {};
 
 AudioMediaPlayer::~AudioMediaPlayer() {
   Stop();

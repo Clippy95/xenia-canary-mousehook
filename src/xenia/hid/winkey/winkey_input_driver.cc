@@ -18,6 +18,77 @@
 #include "xenia/ui/virtual_key.h"
 #include "xenia/ui/window.h"
 
+#include "xenia/hid/winkey/hookables/CallOfDuty.h"
+#include "xenia/hid/winkey/hookables/Crackdown2.h"
+#include "xenia/hid/winkey/hookables/DeadRising.h"
+#include "xenia/hid/winkey/hookables/Farcry.h"
+#include "xenia/hid/winkey/hookables/GearsOfWars.h"
+#include "xenia/hid/winkey/hookables/JustCause.h"
+#include "xenia/hid/winkey/hookables/RDR.h"
+#include "xenia/hid/winkey/hookables/SaintsRow1.h"
+#include "xenia/hid/winkey/hookables/SaintsRow2.h"
+#include "xenia/hid/winkey/hookables/SourceEngine.h"
+#include "xenia/hid/winkey/hookables/goldeneye.h"
+#include "xenia/hid/winkey/hookables/halo3.h"
+
+DEFINE_bool(invert_y, false, "Invert mouse Y axis", "MouseHook");
+DEFINE_bool(invert_x, false, "Invert mouse X axis", "MouseHook");
+DEFINE_bool(swap_wheel, false,
+            "Swaps binds for wheel, so wheel up will go to next weapon & down "
+            "will go to prev",
+            "MouseHook");
+DEFINE_double(sensitivity, 1, "Mouse sensitivity", "MouseHook");
+DEFINE_double(
+    fov_sensitivity, 0.9,
+    "Mouse scale when FOV is lowered (Currently for COD, DR, RDR & UE3 Games)",
+    "MouseHook");
+
+DEFINE_double(right_stick_hold_time_workaround, 33,
+              "For games that move the right stick alongside the mouse, this "
+              "declares how long to hold in that direction when mouse movement "
+              "is detected. (Currently Saints Row 2 & Gears Of Wars series)",
+              "MouseHook");
+
+DEFINE_int32(
+    ue3_use_timer_to_hook_workaround, 0,
+    "(in non-decimal seconds) Wait a set of amount of time before hooking into "
+    "Unreal Engine 3, do not change this unless UE3 games crash. 0 is disabled "
+    "and relies on when intro finishes loading.",
+    "MouseHook");
+
+DEFINE_bool(use_right_stick_workaround_gears1and2, true,
+            "(Gears) Enables the use of the RS workaround for Gears 1 and 2. "
+            "Recommended for Gears 3 & Judgement.",
+            "MouseHook");
+
+DEFINE_bool(use_right_stick_workaround, true,
+            "Enables the use of the RS workaround for games that use it. "
+            "Always enabled for Saints Row 2.",
+            "MouseHook");
+DEFINE_bool(
+    disable_autoaim, true,
+    "Disable autoaim in games that support it (currently GE,PD,SR and COD)",
+    "MouseHook");
+DEFINE_double(source_sniper_sensitivity, 0, "Source Sniper Sensitivity",
+              "MouseHook");
+DEFINE_int32(walk_orthogonal, 22800,
+             "Joystick movement for forward/backward/left/right shiftwalking, "
+             "default 22800 equates to 134.99 h.u./s",
+             "MouseHook");
+DEFINE_int32(walk_diagonal, 18421,
+             "Joystick movement for diagonal shiftwalking, default 18421 "
+             "equates to 134.99 h.u./s",
+             "MouseHook");
+DEFINE_bool(rdr_turbo_gallop_horse, false,
+            "(Red Dead Redemption) Enables turbo galloping for horses and "
+            "coaches in Red Dead "
+            "Redemption (Bound to Modifier same as Turbo sprint)",
+            "MouseHook");
+DEFINE_bool(
+    rdr_snappy_wheel, true,
+    "(Red Dead Redemption) Snaps the Weapon Wheel in 45 degree increments",
+    "MouseHook");
+
 #define XE_HID_WINKEY_BINDING(button, description, cvar_name, \
                               cvar_default_value)             \
   DEFINE_string(cvar_name, cvar_default_value,                \
@@ -362,6 +433,25 @@ WinKeyInputDriver::WinKeyInputDriver(xe::ui::Window* window,
                   cvars::cvar_name);
 #include "winkey_binding_table.inc"
 #undef XE_HID_WINKEY_BINDING
+
+  // Register our supported hookable games
+  hookable_games_.push_back(std::move(std::make_unique<GoldeneyeGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<Halo3Game>()));
+  hookable_games_.push_back(std::move(std::make_unique<SourceEngine>()));
+  hookable_games_.push_back(std::move(std::make_unique<Crackdown2Game>()));
+  hookable_games_.push_back(std::move(std::make_unique<SaintsRow1Game>()));
+  hookable_games_.push_back(std::move(std::make_unique<SaintsRow2Game>()));
+  hookable_games_.push_back(std::move(std::make_unique<JustCauseGame>()));
+  hookable_games_.push_back(
+      std::move(std::make_unique<RedDeadRedemptionGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<FarCryGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<GearsOfWarsGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<DeadRisingGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<CallOfDutyGame>()));
+
+  auto path = std::filesystem::current_path() / "bindings.ini";
+
+  ParseCustomKeyBinding(path.string());
 
   window->AddInputListener(&window_input_listener_, window_z_order);
 }
