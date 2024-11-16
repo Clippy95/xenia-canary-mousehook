@@ -108,3 +108,7 @@ node_modules/.bin/
 /cache0
 /devkit
 recent.toml
+/third_party/FFmpeg
+/third_party/imgui
+/third_party/SDL2
+/third_party/xbyak
