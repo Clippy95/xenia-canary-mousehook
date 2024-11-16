@@ -56,44 +56,53 @@ struct GameBuildAddrs {
   uint32_t cam_type_offset;
   uint32_t pause_flag_address;         // gamePausePos
   uint32_t fovscale_base_address;      // rdrZoomMemPos
+  std::vector<uint32_t> fovscale_offsets;
   uint32_t fovscale_offset;            // unused for now..
   uint32_t weapon_wheel_base_address;  // rdrMenuTypeMemPos
   uint32_t weapon_wheel_offset;
   uint32_t cinematicCam_address;
 };
-
-struct GameBuildAddrs supported_builds[6] = {
-    {"",   NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+// TODO: find multipointers for these, especially carriage,
+// mounted_base_address, cam_type_address
+std::map<RedDeadRedemptionGame::GameBuild, GameBuildAddrs> supported_builds{
+    {RedDeadRedemptionGame::GameBuild::Unknown,
+     {"",   NULL, NULL, NULL, NULL, NULL, NULL, NULL,   NULL, NULL, NULL,
+      NULL, NULL, NULL, NULL, NULL, NULL, NULL, {NULL}, NULL, NULL}},
     // RedDeadRedemption_GOTY_Disk1
-    {"12.0",     0x82010BEC, 0x7A3A5C72, 0x8309C298, 0x460,      0x45C,
-     0x458,      0x3EC,      0xBE684000, 0x820D6A8C, 0xF1F,      0x103F,
-     0xBBC67E24, 0x2B0,      0x820D68E8, 0x794B,     0x82F79E77, 0xBE67B80C,
-     0xD0,       0x82F7B450, 0xF3,       0x7049E69C},
+    {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk1,
+     {"12.0",     0x82010BEC, 0x7A3A5C72, 0x8309C298, 0x460,      0x45C,
+      0x458,      0x3EC,      0xBE684000, 0x820D6A8C, 0xF1F,      0x103F,
+      0xBBC67E24, 0x2B0,      0x820D68E8, 0x794B,     0x82F79E77, 0xBE67B80C,
+      {NULL},     0xD0,       0x82F7B450, 0xF3,       0x7049E69C}},
 
     // RedDeadRedemption_GOTY_Disk2
-    {"12.0",     0x82010C0C, 0x7A3A5C72, 0x8309C298, 0x460,      0x45C,
-     0x458,      0x3EC,      0xBE63AB24, 0xBE65C7FC, 0x1A0,      0x2C0,
-     0xBE642900, 0x2B0,      0x8305D684, 0x4D0D4B,   0x82F79E77, 0xBE65780C,
-     0xD0,       0x82F7B450, 0xF3,       0x7049E69C},
+    {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_GOTY_Disk2,
+     {"12.0",        0x82010C0C, 0x7A3A5C72, 0x8309C298, 0x460,      0x45C,
+      0x458,         0x3EC,      0xBE63AB24, 0xBE65C7FC, 0x1A0,      0x2C0,
+      0xBE642900,    0x2B0,      0x8305D684, 0x4D0D4B,   0x82F79E77, 0x8307D748,
+      {0x5C0, 0xC0}, 0xD0,       0x82F7B450, 0xF3,       0x7049E69C}},
 
     // RedDeadRedemption_Original_TU0
-    {"1.0",      NULL,       NULL,       0x830641D8, 0x460,      0x45C,
-     0x458,      0x3EC,      0xBE65B73C, 0xBE661AC8, 0x1A0,      0x2C0,
-     0xBBC5FD14, 0x2B0,      0xBE68A060, 0xB,        0x82F49B73, 0xBE64CEAC,
-     0xD0,       0x82F4B0E0, 0xF3,       0x7049E69C},
+    {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_Original_TU0,
+     {"1.0",      NULL,  NULL,       0x830641D8, 0x460,      0x45C,
+      0x458,      0x3EC, 0xBE65B73C, 0xBE661AC8, 0x1A0,      0x2C0,
+      0xBBC5FD14, 0x2B0, 0xBE68A060, 0xB,        0x82F49B73, 0xBE64CEAC,
+      {NULL},     0xD0,  0x82F4B0E0, 0xF3,       0x7049E69C}},
 
     // RedDeadRedemption_Original_TU9
-    {"1.0.9",    NULL,       NULL,       0x8305DBE8, 0x460,      0x45C,
-     0x458,      0x3EC,      0xBE69827C, 0xBE696608, 0x1A0,      0x2C0,
-     0xBBC63E24, 0x2B0,      0xBE6BAB60, 0xB,        0x82F49EB7, 0xBE685CEC,
-     0xD0,       0x82F4B660, 0xF3,       0x7049E69C},
+    {RedDeadRedemptionGame::GameBuild::RedDeadRedemption_Original_TU9,
+     {"1.0.9",    NULL,  NULL,       0x8305DBE8, 0x460,      0x45C,
+      0x458,      0x3EC, 0xBE69827C, 0xBE696608, 0x1A0,      0x2C0,
+      0xBBC63E24, 0x2B0, 0xBE6BAB60, 0xB,        0x82F49EB7, 0xBE685CEC,
+      {NULL},     0xD0,  0x82F4B660, 0xF3,       0x7049E69C}},
 
     // RedDeadRedemption_UndeadNightmare_Standalone_TU4
-    {"4.0",      NULL,       NULL,       0x8309AF88, 0x460,      0x45C,
-     0x458,      0x3EC,      0xBE6430A4, 0xBE65B88C, 0x1A0,      0x2C0,
-     0xBBC67E3C, 0x2B0,      0xBE685260, 0xB,        0x82F79E77, 0xBE64F80C,
-     0xD0,       0x82F7B450, 0xF3,       0x7049E69C}};
+    {RedDeadRedemptionGame::GameBuild::
+         RedDeadRedemption_UndeadNightmare_Standalone_TU4,
+     {"4.0",      NULL,  NULL,       0x8309AF88, 0x460,      0x45C,
+      0x458,      0x3EC, 0xBE6430A4, 0xBE65B88C, 0x1A0,      0x2C0,
+      0xBBC67E3C, 0x2B0, 0xBE685260, 0xB,        0x82F79E77, 0xBE64F80C,
+      {},         0xD0,  0x82F7B450, 0xF3,       0x7049E69C}}};
 
 RedDeadRedemptionGame::~RedDeadRedemptionGame() = default;
 uint32_t RedDeadRedemptionGame::cached_carriage_x_address = 0;
@@ -104,25 +113,25 @@ uint32_t RedDeadRedemptionGame::cached_auto_center_strength_address_carriage =
 static uint32_t cached_mounting_center_final = 0;
 static uint32_t cached_cover_center_final = 0;
 bool RedDeadRedemptionGame::IsGameSupported() {
-  if (kernel_state()->title_id() != kTitleIdRedDeadRedemption) {
+  auto title_id = kernel_state()->title_id();
+  if (title_id != kTitleIdRedDeadRedemption) {
     return false;
   }
 
   const std::string current_version =
       kernel_state()->emulator()->title_version();
 
-  for (int i = 0; i < (sizeof(supported_builds) / sizeof(supported_builds[0]));
-       i++) {
-    if (supported_builds[i].check_addr != NULL) {
+  for (auto& build : supported_builds) {
+    if (build.second.check_addr != NULL) {
       auto* check_addr_ptr =
           kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-              supported_builds[i].check_addr);
-      if (*check_addr_ptr == supported_builds[i].check_value) {
-        game_build_ = static_cast<RedDeadRedemptionGame::GameBuild>(i);
+              build.second.check_addr);
+      if (*check_addr_ptr == build.second.check_value) {
+        game_build_ = build.first;
         return true;
       }
-    } else if (current_version == supported_builds[i].title_version) {
-      game_build_ = static_cast<RedDeadRedemptionGame::GameBuild>(i);
+    } else if (current_version == build.second.title_version) {
+      game_build_ = build.first;
       return true;
     }
   }
@@ -142,11 +151,6 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
                                     RawInputState& input_state,
                                     X_INPUT_STATE* out_state) {
   if (!IsGameSupported()) {
-    return false;
-  }
-
-  if (game_build_ < 0 ||
-      game_build_ >= sizeof(supported_builds) / sizeof(supported_builds[0])) {
     return false;
   }
 
@@ -214,38 +218,43 @@ bool RedDeadRedemptionGame::DoHooks(uint32_t user_index,
       }
     }
 
-    // static uint32_t saved_fovscale_address = 0;
     static float divisor = 850.5f;
     if (supported_builds[game_build_].fovscale_base_address != NULL) {
-      xe::be<uint32_t>* fovscale_address =
-          kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-              supported_builds[game_build_].fovscale_base_address);
-      xe::be<float>* fovscale =
-          kernel_memory()->TranslateVirtual<xe::be<float>*>(
-              *fovscale_address +
-              supported_builds[game_build_].fovscale_offset);
-      xe::be<uint16_t>* fovscale_sanity =
-          kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
-              *fovscale_address +
-              supported_builds[game_build_].fovscale_offset - 0x38);
+      xe::be<uint32_t>* fovscale_base_address =
+          multi_pointer(supported_builds[game_build_].fovscale_base_address,
+                        supported_builds[game_build_].fovscale_offsets);
+      if (fovscale_base_address) {
+        auto* fovscale_address =
+            kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+                *fovscale_base_address +
+                supported_builds[game_build_].fovscale_offset);
+        xe::be<float>* fovscale =
+            kernel_memory()->TranslateVirtual<xe::be<float>*>(
+                *fovscale_address +
+                supported_builds[game_build_].fovscale_offset);
+        xe::be<uint16_t>* fovscale_sanity =
+            kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
+                *fovscale_address +
+                supported_builds[game_build_].fovscale_offset - 0x38);
 
-      if (*fovscale_sanity == 0x0000) {
-        float fov = *fovscale;
-        if (fov <= 0.5f || fov > 35.f) {
-          fov = 1.f;
+        if (*fovscale_sanity == 0x0000) {
+          float fov = *fovscale;
+          if (fov <= 0.5f || fov > 35.f) {
+            fov = 1.f;
+          }
+          const float a = (float)cvars::fov_sensitivity;
+          if (fov >= 0.96f) {
+            fov = a * fov + (1 - a) * (fov * fov);
+          }
+
+          divisor = 850.5f * fov;
+
+          // printf("fov: %f divisor: %f\n", fov, divisor);
         }
-        const float a = (float)cvars::fov_sensitivity;
-        if (fov >= 0.96f) {
-          fov = a * fov + (1 - a) * (fov * fov);
+
+        else {
+          divisor = 850.5f;
         }
-
-        divisor = 850.5f * fov;
-
-        // printf("fov: %f divisor: %f\n", fov, divisor);
-      }
-
-      else {
-        divisor = 850.5f;
       }
     }
     if (supported_builds[game_build_].cover_base_address != NULL) {
