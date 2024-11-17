@@ -28,7 +28,7 @@ DECLARE_double(fov_sensitivity);
 DECLARE_double(right_stick_hold_time_workaround);
 DECLARE_bool(invert_y);
 DECLARE_bool(invert_x);
-DECLARE_bool(ge_gun_sway);
+DECLARE_bool(ge_gun_sway);  // Test
 
 const uint32_t kTitleIdPerfectDarkZero = 0x4D5307D3;
 
