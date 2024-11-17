@@ -82,14 +82,32 @@ DEFINE_bool(ge_remove_blur, false,
 DEFINE_bool(ge_debug_menu, false,
             "(GoldenEye) Enables the debug menu, accessible with LB/1",
             "MouseHook");
-DEFINE_bool(sr2_better_drive_cam, true,
-            "(Saints Row 2) unties X rotation from vehicles when "
-            "auto-centering is disabled akin to GTA IV.",
+DEFINE_bool(sr_better_drive_cam, true,
+            "(Saints Row 1&2) unties X rotation from vehicles when "
+            "auto-centering is disabled, this makes the camera similar to the "
+            "GTA series vehicle camera.",
             "MouseHook");
 
 DEFINE_bool(sr2_better_handbrake_cam, true,
             "(Saints Row 2) unties X rotation from vehicles when "
             "handbraking akin to SR1.",
+            "MouseHook");
+
+DEFINE_bool(
+    sr2_hold_fine_aim, true,
+    "(Saints Row 2) Switches fineaim (ADS) from a toggle to hold press.",
+    "MouseHook");
+
+DEFINE_bool(sr_havok_fix_frametime, false,
+            "(Saints Row 1&2) Fixes cutscene object synchronization and doors "
+            "teleporting on high fps, as seen in Juiced Patch. (Causes "
+            "Performance loss at a higher FPSes.) ",
+            "MouseHook");
+
+DEFINE_bool(sr1_increase_vehicle_rotation_limit, true,
+            "(Saints Row 1) Patch vehicle vertical rotation limit to be mostly "
+            "the same "
+            "as on-foot.",
             "MouseHook");
 
 DEFINE_bool(allow_game_relative_writes, false,
@@ -102,6 +120,12 @@ DECLARE_int32(user_language);
 
 DECLARE_bool(allow_plugins);
 DECLARE_bool(disable_autoaim);
+
+DEFINE_int32(priority_class, 0,
+             "Forces Xenia to use different process priority than default one. "
+             "It might affect performance and cause unexpected bugs. Possible "
+             "values: 0 - Normal, 1 - Above normal, 2 - High",
+             "General");
 
 namespace xe {
 using namespace xe::literals;
@@ -131,6 +155,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
       display_window_(nullptr),
       memory_(),
       audio_system_(),
+      audio_media_player_(),
       graphics_system_(),
       input_system_(),
       export_resolver_(),
@@ -142,6 +167,13 @@ Emulator::Emulator(const std::filesystem::path& command_line,
       paused_(false),
       restoring_(false),
       restore_fence_() {
+  if (cvars::priority_class != 0) {
+    if (SetProcessPriorityClass(cvars::priority_class)) {
+      XELOGI("Higher priority class request: Successful. New priority: {}",
+             cvars::priority_class);
+    }
+  }
+
 #if XE_PLATFORM_WIN32 == 1
   // Show a disclaimer that links to the quickstart
   // guide the first time they ever open the emulator
@@ -180,6 +212,7 @@ Emulator::~Emulator() {
   input_system_.reset();
   graphics_system_.reset();
   audio_system_.reset();
+  audio_media_player_.reset();
 
   kernel_state_.reset();
   file_system_.reset();
@@ -315,6 +348,9 @@ X_STATUS Emulator::Setup(
     if (result) {
       return result;
     }
+    audio_media_player_ = std::make_unique<apu::AudioMediaPlayer>(
+        audio_system_.get(), kernel_state_.get());
+    audio_media_player_->Setup();
   }
 
   // Initialize emulator fallback exception handling last.
@@ -1529,8 +1565,10 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
         0xD19F16A4,  // stfs      f12, 0x16A4(r31)
         0xD19F1690,  // stfs      f12, 0x1690(r31)
         0xD15F1694,  // stfs      f10, 0x1694(r31)
-        0xD0FF0CFC,  // stfs      f7, 0xCFC(r31)
-        0xD0BF0D00   // stfs      f5, 0xD00(r31)
+        0xD0FF0CFC,  // stfs      f7, 0xCFC(r31) // Right gun x
+        0xD0BF0D00,  // stfs      f5, 0xD00(r31) // Right gun y
+        0xD07F14A0,  // stfs      f3, 0x14A0(r31) // Left gun x
+        0xD05F14A4   // stfs      f2, 0x14A4(r31) // Left gun y
     };
 
     int patched = 0;
@@ -1639,6 +1677,84 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     }
   }
 
+  if (module->title_id() == 0x545107D1) {
+    struct SR1PatchOffsets {
+      uint32_t check_addr;
+      uint32_t check_value;
+      uint32_t beNOP;
+      uint32_t mousefix_addr1;
+      uint32_t mousefix_addr2;
+      uint32_t mousefix_addr3;
+      uint32_t aim_assist_xbtl;  // File declares aim_assist values.
+      uint32_t havok_write_frametime_address1;
+      uint32_t havok_write_frametime_address2;
+      uint32_t vehicle_rotationXWrite_addr_start;  // lfs f0, (flt_827F9B04 -
+                                                   // 0x827F99A0)(r31) -- no
+                                                   // idea how I figured this,
+                                                   // or why/how it works.
+      uint32_t vehicle_rotationYLimit_max_read_addr1;
+      uint32_t vehicle_rotationYLimit_max_read_addr2;
+      uint32_t vehicle_rotationYLimit_min_read_addr1;
+      uint32_t max_float_addr_lis1;
+      uint32_t max_float_addr_lis2;
+      uint32_t min_float_addr_lis1;
+      uint32_t write_max_value1;  // making it same as on-foot causes the camera
+                                  // to clip.
+      uint32_t havok_value_address;
+      uint32_t fps_1over60_value;
+    };
+    std::vector<SR1PatchOffsets> supported_builds = {
+        // TU1 Release build
+        {0x82050304, 0x7361696E, 0x60000000, 0x8249db00, 0x8249dd28, 0x8249dd50,
+         0x82079cbc, 0x82195324, 0x8225BD8C, 0x8211D604, 0x82772D90, 0x8211FC8C,
+         0x82772DB0, 0xC108C88C, 0xC00BC88C, 0xC0C8B850, 0x8208C88C, 0x835F2684,
+         0x3c888889},
+    };
+    for (auto& build : supported_builds) {
+      auto* test_addr = (xe::be<uint32_t>*)module->memory()->TranslateVirtual(
+          build.check_addr);
+      if (*test_addr != build.check_value) {
+        continue;
+      }
+      // Write beNOP to each write address
+      patch_addr(build.mousefix_addr1, build.beNOP);
+      patch_addr(build.mousefix_addr2, build.beNOP);
+      patch_addr(build.mousefix_addr3, build.beNOP);
+      if (cvars::disable_autoaim && build.aim_assist_xbtl) {
+        patch_addr(build.aim_assist_xbtl, build.beNOP);
+      }
+      if (cvars::sr_havok_fix_frametime &&
+          build.havok_write_frametime_address1 &&
+          build.havok_write_frametime_address2) {
+        patch_addr(build.havok_write_frametime_address1, build.beNOP);
+        patch_addr(build.havok_write_frametime_address2, build.beNOP);
+        // in case user boots game with inputs other than winkey.
+        patch_addr(build.havok_value_address, build.fps_1over60_value);
+      }
+      if (cvars::sr_better_drive_cam &&
+          build.vehicle_rotationXWrite_addr_start) {
+        uint32_t addr = build.vehicle_rotationXWrite_addr_start;
+        for (int i = 0; i < 4; ++i) {
+          patch_addr(addr, build.beNOP);
+          addr += 0x4;
+        }
+      }
+      if (cvars::sr1_increase_vehicle_rotation_limit &&
+          build.vehicle_rotationYLimit_max_read_addr1) {
+        // 827FA3F8 , 827FA3F4 for current rotation limit, maybe lower the max
+        // value because it clips into the vehicle?
+        patch_addr(build.vehicle_rotationYLimit_max_read_addr1,
+                   build.max_float_addr_lis1);
+        patch_addr(build.vehicle_rotationYLimit_max_read_addr2,
+                   build.max_float_addr_lis2);
+        patch_addr(build.vehicle_rotationYLimit_min_read_addr1,
+                   build.min_float_addr_lis1);
+        patch_addr(build.write_max_value1, 0xbf000000);
+      }
+      break;
+    }
+  }
+
   if (module->title_id() == 0x545107FC) {
     struct SR2PatchOffsets {
       uint32_t check_addr;
@@ -1682,6 +1798,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       uint32_t Vehicle_RotationXWrite_addr1;
       uint32_t Vehicle_RotationXWrite_addr2;  // Handbrake.
       uint32_t aim_assist_xbtl;  // File declares aim_assist values.
+      uint32_t havok_write_frametime_address1;
+      uint32_t havok_value_address;
+      uint32_t fps_1over60_value;
     };
 
     std::vector<SR2PatchOffsets> supported_builds = {
@@ -1691,7 +1810,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
          0x8247832c, 0x821a4b84, 0x824e6a68, 0x824e7f50, 0x824e6b8c, 0x82478934,
          0x824e6b2c, 0x82478330, 0x82478094, 0x821a4b88, 0x82B7A5AC, 0x82B7A5A8,
          0x82B77C04, 0x82B77C08, 0x82B77C0C, 0x82B77C08, 0x82B77C10, 0x821A4D20,
-         0x821A4D18, 0x821a1f74, 0x821A2A2C, 0x820A61C0},
+         0x821A4D18, 0x821a1f74, 0x821A2A2C, 0x820A61C0, 0x8221CEAC, 0x837DB620,
+         0x3c888889},
     };
 
     for (auto& build : supported_builds) {
@@ -1731,7 +1851,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       patch_addr(build.multiplierread_addr5, build.zero_patch1);
       patch_addr(build.sensYvalue_addr1, build.zero_patch1);
       patch_addr(build.sensXvalue_addr2, build.zero_patch1);
-      if (cvars::sr2_better_drive_cam && build.Vehicle_RotationXWrite_addr1) {
+      if (cvars::sr_better_drive_cam && build.Vehicle_RotationXWrite_addr1) {
         patch_addr(build.Vehicle_RotationXWrite_addr1, build.beNOP);
       }
 
@@ -1742,7 +1862,10 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       if (cvars::disable_autoaim && build.aim_assist_xbtl) {
         patch_addr(build.aim_assist_xbtl, build.beNOP);
       }
-
+      if (cvars::sr_havok_fix_frametime && build.havok_write_frametime_address1)
+        patch_addr(build.havok_write_frametime_address1, build.beNOP);
+      // in case user boots game with inputs other than winkey.
+      patch_addr(build.havok_value_address, build.fps_1over60_value);
       break;
     }
   }
@@ -1947,6 +2070,17 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
           patch_addr(build.lockon_address, patch_value);
         }
 
+        break;
+      }
+    }
+  }
+
+  if (module->title_id() == 0x584111F7) {  // Minecraft - Prevent game from
+                                           // writing to inventory cursor
+    std::map<std::string, uint32_t> supported_builds = {{"1.0.80", 0x827594EC}};
+    for (auto& build : supported_builds) {
+      if (build.first == title_version_) {
+        patch_addr(build.second, 0x60000000);
         break;
       }
     }
