@@ -11,6 +11,7 @@
 #define XENIA_KERNEL_XAM_APPS_XMP_APP_H_
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,6 +28,36 @@ namespace apps {
 // Only source of docs for a lot of these functions:
 // https://github.com/oukiar/freestyledash/blob/master/Freestyle/Scenes/Media/Music/ScnMusic.cpp
 
+struct XMP_SONGDESCRIPTOR {
+  xe::be<uint32_t> file_path_ptr;
+  xe::be<uint32_t> title_ptr;
+  xe::be<uint32_t> artist_ptr;
+  xe::be<uint32_t> album_ptr;
+  xe::be<uint32_t> album_artist_ptr;
+  xe::be<uint32_t> genre_ptr;
+  xe::be<uint32_t> track_number;
+  xe::be<uint32_t> duration;
+  xe::be<uint32_t> song_format;
+};
+static_assert_size(XMP_SONGDESCRIPTOR, 36);
+
+constexpr uint32_t kMaxXmpMetadataStringLength = 40;
+
+struct XMP_SONGINFO {
+  X_HANDLE handle;
+
+  uint8_t unknown[0x23C];
+  xe::be<char16_t> title[kMaxXmpMetadataStringLength];
+  xe::be<char16_t> artist[kMaxXmpMetadataStringLength];
+  xe::be<char16_t> album[kMaxXmpMetadataStringLength];
+  xe::be<char16_t> album_artist[kMaxXmpMetadataStringLength];
+  xe::be<char16_t> genre[kMaxXmpMetadataStringLength];
+  xe::be<uint32_t> track_number;
+  xe::be<uint32_t> duration;
+  xe::be<uint32_t> song_format;
+};
+static_assert_size(XMP_SONGINFO, 988);
+
 class XmpApp : public App {
  public:
   enum class State : uint32_t {
@@ -39,12 +70,16 @@ class XmpApp : public App {
     kTitle = 1,
   };
   enum class PlaybackMode : uint32_t {
-    // kInOrder = ?,
-    kUnknown = 0,
+    kInOrder = 0,
+    kShuffle = 1,
   };
   enum class RepeatMode : uint32_t {
-    // kNoRepeat = ?,
-    kUnknown = 0,
+    kPlaylist = 0,
+    kNoRepeat = 1,
+  };
+  enum class PlaybackFlags : uint32_t {
+    kDefault = 0,
+    kAutoPause = 1,
   };
   struct Song {
     enum class Format : uint32_t {
@@ -92,21 +127,11 @@ class XmpApp : public App {
                                 uint32_t buffer_length) override;
 
  private:
-  void OnStateChanged();
-
-  State state_;
-  PlaybackClient playback_client_;
-  PlaybackMode playback_mode_;
-  RepeatMode repeat_mode_;
-  uint32_t unknown_flags_;
-  float volume_;
-  Playlist* active_playlist_;
-  int active_song_index_;
-
   xe::global_critical_region global_critical_region_;
-  std::unordered_map<uint32_t, Playlist*> playlists_;
-  uint32_t next_playlist_handle_;
-  uint32_t next_song_handle_;
+
+  // TODO: Remove it and replace with guest handles!
+  uint32_t next_playlist_handle_ = 0;
+  uint32_t next_song_handle_ = 0;
 };
 
 }  // namespace apps

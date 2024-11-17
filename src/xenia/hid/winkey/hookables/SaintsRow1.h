@@ -1,3 +1,4 @@
+#pragma once
 /**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
@@ -7,41 +8,54 @@
  ******************************************************************************
  */
 
-#ifndef XENIA_HID_WINKEY_FarCry_H_
-#define XENIA_HID_WINKEY_FarCry_H_
-
+#ifndef XENIA_HID_WINKEY_SaintsRow1_H_
+#define XENIA_HID_WINKEY_SaintsRow1_H_
+#include <chrono>  // Include for chrono timing
 #include "xenia/hid/winkey/hookables/hookable_game.h"
 
 namespace xe {
 namespace hid {
 namespace winkey {
 
-class FarCryGame : public HookableGame {
+class SaintsRow1Game : public HookableGame {
  public:
-  enum class GameBuild { Unknown, FarCry_TU0 };
+  enum class GameBuild { Unknown, SaintsRow1_TU1 };
 
-  ~FarCryGame() override;
+  ~SaintsRow1Game() override;
 
   bool IsGameSupported();
 
+  float RadianstoDegree(float radians);
+  float DegreetoRadians(float degree);
+
   bool DoHooks(uint32_t user_index, RawInputState& input_state,
                X_INPUT_STATE* out_state);
-
+  void FixHavokFrameTime(float frametime);
+  bool isTervelPlugin();
+  bool inFirstPerson();
+  bool isPaused();
+  void WeaponWheelScrollWheel(RawInputState& input_state);
+  bool inMapScreen();
+  void MapCursor(RawInputState& input_state);
   std::string ChooseBinds();
-
   bool ModifierKeyHandler(uint32_t user_index, RawInputState& input_state,
                           X_INPUT_STATE* out_state);
-
   void WeaponSwitchHandler(uint32_t user_index, RawInputState& input_state,
                            X_INPUT_STATE* out_state, int weapon,
                            uint16_t buttons);
 
  private:
   GameBuild game_build_ = GameBuild::Unknown;
+  // Timer variables to hold the state for a while // this is probably not ideal
+  // -Clippy95
+  std::chrono::steady_clock::time_point last_movement_time_x_;
+  std::chrono::steady_clock::time_point last_movement_time_y_;
+  uint8_t tervelplugin_status;
+  uint8_t* wheel_status;
 };
 
 }  // namespace winkey
 }  // namespace hid
 }  // namespace xe
 
-#endif  // XENIA_HID_WINKEY_FarCry_H_
+#endif  // XENIA_HID_WINKEY_SaintsRow1_H_

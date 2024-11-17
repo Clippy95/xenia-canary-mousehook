@@ -30,6 +30,10 @@ class XmaDecoder;
 
 class AudioSystem {
  public:
+  // TODO(gibbed): respect XAUDIO2_MAX_QUEUED_BUFFERS somehow (ie min(64,
+  // XAUDIO2_MAX_QUEUED_BUFFERS))
+  static const size_t kMaximumQueuedFrames = 64;
+
   virtual ~AudioSystem();
 
   Memory* memory() const { return memory_; }
@@ -42,7 +46,12 @@ class AudioSystem {
   X_STATUS RegisterClient(uint32_t callback, uint32_t callback_arg,
                           size_t* out_index);
   void UnregisterClient(size_t index);
-  void SubmitFrame(size_t index, uint32_t samples_ptr);
+  void SubmitFrame(size_t index, float* samples);
+
+  // Creates an independent, non-registered driver instance.
+  virtual AudioDriver* CreateDriver(xe::threading::Semaphore* semaphore,
+                                    uint32_t frequency, uint32_t channels,
+                                    bool need_format_conversion) = 0;
 
   bool Save(ByteStream* stream);
   bool Restore(ByteStream* stream);
@@ -62,10 +71,6 @@ class AudioSystem {
                                 xe::threading::Semaphore* semaphore,
                                 AudioDriver** out_driver) = 0;
   virtual void DestroyDriver(AudioDriver* driver) = 0;
-
-  // TODO(gibbed): respect XAUDIO2_MAX_QUEUED_BUFFERS somehow (ie min(64,
-  // XAUDIO2_MAX_QUEUED_BUFFERS))
-  static const size_t kMaximumQueuedFrames = 64;
 
   Memory* memory_ = nullptr;
   cpu::Processor* processor_ = nullptr;
