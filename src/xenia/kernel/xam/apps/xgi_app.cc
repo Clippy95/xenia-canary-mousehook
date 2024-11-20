@@ -65,12 +65,19 @@ struct XUSER_STATS_COLUMN {
 struct XUSER_STATS_SPEC {
   xe::be<uint32_t> ViewId;
   xe::be<uint32_t> NumColumnIds;
-  xe::be<uint16_t> rgwColumnIds[0x40];
+  xe::be<uint16_t> rgwColumnIds[XUserMaxStatsAttributes];
 };
 
 struct XUSER_STATS_RESET {
   xe::be<uint32_t> user_index;
   xe::be<uint32_t> view_id;
+};
+
+struct XUSER_ANID {
+  xe::be<uint32_t> user_index;
+  xe::be<uint32_t> cchAnIdBuffer;
+  xe::be<uint32_t> pszAnIdBuffer;
+  xe::be<uint32_t> value_const;  // 1
 };
 
 XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
@@ -103,13 +110,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       XELOGI("XSessionSearch");
       XSessionSearch* data = reinterpret_cast<XSessionSearch*>(buffer);
 
-      uint32_t num_users = 0;
-
-      for (uint32_t i = 0; i < X_USER_MAX_USERS; i++) {
-        if (kernel_state()->xam_state()->IsUserSignedIn(i)) {
-          num_users++;
-        }
-      }
+      const uint32_t num_users = kernel_state()
+                                     ->xam_state()
+                                     ->profile_manager()
+                                     ->CountSignedInProfiles();
 
       return XSession::GetSessions(memory_, data, num_users);
     }
@@ -159,7 +163,9 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return session->MigrateHost(data);
     }
     case 0x000B0021: {
-      struct XLeaderboard {
+      XELOGI("XUserReadStats");
+
+      struct XUserReadStats {
         xe::be<uint32_t> titleId;
         xe::be<uint32_t> xuids_count;
         xe::be<uint32_t> xuids_guest_address;
@@ -167,7 +173,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         xe::be<uint32_t> specs_guest_address;
         xe::be<uint32_t> results_size;
         xe::be<uint32_t> results_guest_address;
-      }* data = reinterpret_cast<XLeaderboard*>(buffer);
+      }* data = reinterpret_cast<XUserReadStats*>(buffer);
 
       if (!data->results_guest_address) {
         return 1;
@@ -181,13 +187,21 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       auto xuids = memory_->TranslateVirtual<xe::be<uint64_t>*>(
           data->xuids_guest_address);
 
-      for (unsigned int playerIndex = 0; playerIndex < data->xuids_count;
-           playerIndex++) {
-        std::string xuid = to_hex_string(xuids[playerIndex]);
+      for (uint32_t player_index = 0; player_index < data->xuids_count;
+           player_index++) {
+        const xe::be<uint64_t> xuid = xuids[player_index];
 
-        Value value;
-        value.SetString(xuid.c_str(), 16, doc.GetAllocator());
-        xuidsJsonArray.PushBack(value, doc.GetAllocator());
+        if (xuid) {
+          std::string xuid_str = string_util::to_hex_string(xuid);
+
+          Value value;
+          value.SetString(xuid_str.c_str(), 16, doc.GetAllocator());
+          xuidsJsonArray.PushBack(value, doc.GetAllocator());
+        }
+      }
+
+      if (xuidsJsonArray.Empty()) {
+        return X_E_SUCCESS;
       }
 
       doc.AddMember("players", xuidsJsonArray, doc.GetAllocator());
@@ -204,10 +218,17 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         Value queryObject(kObjectType);
         queryObject.AddMember("id", queries[queryIndex].ViewId,
                               doc.GetAllocator());
+
+        assert_false(queries[queryIndex].NumColumnIds >
+                     XUserMaxStatsAttributes);
+
+        const uint32_t num_column_ids = std::min<uint32_t>(
+            queries[queryIndex].NumColumnIds, XUserMaxStatsAttributes);
+
         Value statIdsArray(kArrayType);
-        for (uint32_t statIdIndex = 0;
-             statIdIndex < queries[queryIndex].NumColumnIds; statIdIndex++) {
-          statIdsArray.PushBack(queries[queryIndex].rgwColumnIds[statIdIndex],
+        for (uint32_t stat_id_index = 0; stat_id_index < num_column_ids;
+             stat_id_index++) {
+          statIdsArray.PushBack(queries[queryIndex].rgwColumnIds[stat_id_index],
                                 doc.GetAllocator());
         }
         queryObject.AddMember("statisticIds", statIdsArray, doc.GetAllocator());
@@ -223,8 +244,9 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       std::unique_ptr<HTTPResponseObjectJSON> chunk =
           XLiveAPI::LeaderboardsFind((uint8_t*)buffer.GetString());
 
-      if (chunk->RawResponse().response == nullptr) {
-        return X_E_SUCCESS;
+      if (chunk->RawResponse().response == nullptr ||
+          chunk->StatusCode() != HTTP_STATUS_CODE::HTTP_CREATED) {
+        return X_ERROR_FUNCTION_FAILED;
       }
 
       Document leaderboards;
@@ -293,7 +315,42 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
             stat[statIndex].Value.type = static_cast<X_USER_DATA_TYPE>(
                 (*statObjectPtr)["type"].GetUint());
 
-            switch (stat[statIndex].Value.type) {
+            X_USER_DATA_TYPE stat_type = stat[statIndex].Value.type;
+
+            switch (stat_type) {
+              case X_USER_DATA_TYPE::CONTENT: {
+                XELOGW("Statistic type: CONTENT");
+              } break;
+              case X_USER_DATA_TYPE::INT32: {
+                XELOGW("Statistic type: INT32");
+              } break;
+              case X_USER_DATA_TYPE::INT64: {
+                XELOGW("Statistic type: INT64");
+              } break;
+              case X_USER_DATA_TYPE::DOUBLE: {
+                XELOGW("Statistic type: DOUBLE");
+              } break;
+              case X_USER_DATA_TYPE::WSTRING: {
+                XELOGW("Statistic type: WSTRING");
+              } break;
+              case X_USER_DATA_TYPE::FLOAT: {
+                XELOGW("Statistic type: FLOAT");
+              } break;
+              case X_USER_DATA_TYPE::BINARY: {
+                XELOGW("Statistic type: BINARY");
+              } break;
+              case X_USER_DATA_TYPE::DATETIME: {
+                XELOGW("Statistic type: DATETIME");
+              } break;
+              case X_USER_DATA_TYPE::UNSET: {
+                XELOGW("Statistic type: UNSET");
+              } break;
+              default:
+                XELOGW("Unsupported statistic type.", stat_type);
+                break;
+            }
+
+            switch (stat_type) {
               case X_USER_DATA_TYPE::INT32:
                 stat[statIndex].Value.s32 = (*statObjectPtr)["value"].GetUint();
                 break;
@@ -304,13 +361,15 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
               default:
                 XELOGW("Unimplemented stat type for read, will attempt anyway.",
                        stat[statIndex].Value.type);
-                if ((*statObjectPtr)["value"].IsNumber())
+                if ((*statObjectPtr)["value"].IsNumber()) {
                   stat[statIndex].Value.s64 =
                       (*statObjectPtr)["value"].GetUint64();
+                }
             }
 
             stat[statIndex].Value.type = static_cast<X_USER_DATA_TYPE>(
                 (*statObjectPtr)["type"].GetUint());
+
             statIndex++;
           }
 
@@ -370,6 +429,10 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
             kernel_state_->xam_state()->GetUserProfile(user_index);
         if (user_profile) {
           user_profile->contexts_[context_id] = context_value;
+
+          if (context_id == X_CONTEXT_PRESENCE) {
+            auto presence = user_profile->GetPresenceString();
+          }
         }
       }
       return X_E_SUCCESS;
@@ -559,9 +622,34 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       return XSession::GetSessionByID(memory_, data);
     }
+    case 0x000B0060: {
+      XELOGI("XSessionSearchByIds");
+
+      XSessionSearchByIDs* data =
+          reinterpret_cast<XSessionSearchByIDs*>(buffer);
+
+      const X_RESULT result = XSession::GetSessionByIDs(memory_, data);
+
+      SEARCH_RESULTS* search_results =
+          memory_->TranslateVirtual<SEARCH_RESULTS*>(data->search_results_ptr);
+
+      XELOGI("XSessionSearchByIds found {} session(s).",
+             search_results->header.search_results_count);
+
+      return result;
+    }
     case 0x000B0065: {
-      XELOGI("XSessionSearchWeighted unimplemented");
-      return X_E_SUCCESS;
+      XELOGI("XSessionSearchWeighted");
+
+      XSessionSearchWeighted* data =
+          reinterpret_cast<XSessionSearchWeighted*>(buffer);
+
+      const uint32_t num_users = kernel_state()
+                                     ->xam_state()
+                                     ->profile_manager()
+                                     ->CountSignedInProfiles();
+
+      return XSession::GetWeightedSessions(memory_, data, num_users);
     }
     case 0x000B0026: {
       XELOGI("XSessionFlushStats unimplemented");
@@ -630,10 +718,25 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       return X_E_SUCCESS;
     }
     case 0x000B003D: {
-      // Games used in:
-      // - 5451082a (netplay build).
-      XELOGD("XGIUnkB003D, unimplemented");
-      return X_E_FAIL;
+      // Used in 5451082A, 5553081E
+
+      // XUserGetCachedANID
+      XELOGI("XUserGetANID");
+      XUSER_ANID* data = reinterpret_cast<XUSER_ANID*>(buffer);
+
+      if (!kernel_state()->xam_state()->IsUserSignedIn(data->user_index)) {
+        return X_ERROR_NOT_LOGGED_ON;
+      }
+
+      uint8_t* AnIdBuffer =
+          memory_->TranslateVirtual<uint8_t*>(data->pszAnIdBuffer);
+
+      // Game calls HexDecodeDigit on AnIdBuffer
+      for (uint32_t i = 0; i < data->cchAnIdBuffer - 1; i++) {
+        AnIdBuffer[i] = i % 10;
+      }
+
+      return X_E_SUCCESS;
     }
   }
   XELOGE(
