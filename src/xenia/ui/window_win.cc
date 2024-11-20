@@ -1212,8 +1212,23 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam,
       // chrispy: fix clang use of temporary error
       MonitorUpdateEvent update_event{this, false};
       OnMonitorUpdate(update_event);
+      // MOUSEHOOK: Not the smoothest, if window is locked and attempt to move
+      // window it'll flick for a bit and then stop, probably due to async
+      // nature?
+
+      if (IsMousehooklockingcursor() &&
+          (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        ToggleCursorLock(true, IsMousehooklockingcursor());
+      }
+
     } break;
 
+    case WM_EXITSIZEMOVE: {
+      if (IsMousehooklockingcursor() &&
+          (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        ToggleCursorLock(true, IsMousehooklockingcursor());
+      }
+    } break;
     case WM_SIZE: {
       if (batched_size_update_depth_) {
         batched_size_update_contained_wm_size_ = true;
@@ -1302,7 +1317,7 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam,
     } break;
 
     case WM_SETFOCUS: {
-      if (IsFullscreen() || IsMousehooklockingcursor()) {
+      if (IsFullscreen() || IsMousehooklockingcursor() && !WM_MOVING) {
         ToggleCursorLock(true, IsMousehooklockingcursor());
       }
 
