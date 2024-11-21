@@ -564,7 +564,7 @@ X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
         const auto vk_key = static_cast<ui::VirtualKey>(i);
 
         if (!binds.count(vk_key)) {
-          break;
+          continue;
         }
 
         const auto binding = binds.at(vk_key);
@@ -651,6 +651,12 @@ X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
         }
       }
     }
+  } else {  // So keys don't get 'stuck' if they were held previously when
+            // tabbing in and out from the window
+    for (auto& state : key_states_) {
+      state = false;
+    }
+    mouse_events_ = {};
   }
 
   out_state->packet_number = packet_number_;
