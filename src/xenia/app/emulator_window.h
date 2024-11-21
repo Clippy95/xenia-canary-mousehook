@@ -52,7 +52,8 @@ class EmulatorWindow {
   };
 
   virtual ~EmulatorWindow();
-
+  bool mousehook_cursorlock = false;
+  bool isMousehookcursorlocked() const { return mousehook_cursorlock; }
   static std::unique_ptr<EmulatorWindow> Create(
       Emulator* emulator, ui::WindowedAppContext& app_context, uint32_t width,
       uint32_t height);
@@ -89,6 +90,7 @@ class EmulatorWindow {
   void SetAPIAddress(std::string address);
   void SetNetworkInterfaceByGUID(std::string guid);
   void SetNetworkMode(int32_t mode);
+  void Mousehook_windowedcursor();
   void SetInitializingShaderStorage(bool initializing);
 
   void TakeScreenshot();

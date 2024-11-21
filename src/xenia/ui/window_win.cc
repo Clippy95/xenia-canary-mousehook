@@ -431,6 +431,8 @@ void Win32Window::ApplyNewFullscreen() {
     }
 
     ToggleCursorLock(false);
+
+    if (IsMousehooklockingcursor()) ToggleCursorLock(true, true);
   }
 }
 
@@ -1210,8 +1212,23 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam,
       // chrispy: fix clang use of temporary error
       MonitorUpdateEvent update_event{this, false};
       OnMonitorUpdate(update_event);
+      // MOUSEHOOK: Not the smoothest, if window is locked and attempt to move
+      // window it'll flick for a bit and then stop, probably due to async
+      // nature?
+
+      if (IsMousehooklockingcursor() &&
+          (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        ToggleCursorLock(true, IsMousehooklockingcursor());
+      }
+
     } break;
 
+    case WM_EXITSIZEMOVE: {
+      if (IsMousehooklockingcursor() &&
+          (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        ToggleCursorLock(true, IsMousehooklockingcursor());
+      }
+    } break;
     case WM_SIZE: {
       if (batched_size_update_depth_) {
         batched_size_update_contained_wm_size_ = true;
@@ -1288,7 +1305,7 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam,
     } break;
 
     case WM_KILLFOCUS: {
-      if (IsFullscreen()) {
+      if (IsFullscreen() || IsMousehooklockingcursor()) {
         ToggleCursorLock(false);
       }
 
@@ -1300,8 +1317,8 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam,
     } break;
 
     case WM_SETFOCUS: {
-      if (IsFullscreen()) {
-        ToggleCursorLock(true);
+      if (IsFullscreen() || IsMousehooklockingcursor() && !WM_MOVING) {
+        ToggleCursorLock(true, IsMousehooklockingcursor());
       }
 
       WindowDestructionReceiver destruction_receiver(this);
@@ -1442,7 +1459,8 @@ LRESULT CALLBACK Win32Window::WndProcThunk(HWND hWnd, UINT message,
   return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-void Win32Window::ToggleCursorLock(bool lock) {
+void Win32Window::ToggleCursorLock(bool lock,
+                                   bool mousehook_windowed_boundslimit) {
   if (lock) {
     // Cursor bounds can be lost when focus is lost, reapply them...
     RECT bounds;
@@ -1453,7 +1471,25 @@ void Win32Window::ToggleCursorLock(bool lock) {
     bounds.left++;
     bounds.bottom--;
     bounds.right--;
+    if (mousehook_windowed_boundslimit) {
+      // MOUSEHOOK : need to shrink bounds a lot further otherwise we can hit
+      // the resizing edges of the window and the top title bar!
 
+      int width = bounds.right - bounds.left;
+      int height = bounds.bottom - bounds.top;
+
+      // Maybe shrink more depending on DPI scaling?
+      const float shrink_percentage = 0.9f;
+
+      int width_reduction = static_cast<int>(width * shrink_percentage);
+      int height_reduction = static_cast<int>(height * shrink_percentage);
+
+      // Reduce the bounds
+      bounds.top += height_reduction / 2;
+      bounds.left += width_reduction / 2;
+      bounds.bottom -= height_reduction / 2;
+      bounds.right -= width_reduction / 2;
+    }
     ClipCursor(&bounds);
   } else {
     ClipCursor(NULL);
