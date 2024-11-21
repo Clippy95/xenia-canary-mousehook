@@ -48,6 +48,7 @@ This is a fork of [emoose's Xenia build](https://github.com/emoose/xenia) as ori
 | Postal III | |
 | GoldenEye XBLA | Nov 16th 2007, also renamed as 'Aug 25th 2007' |
 | Perfect Dark XBLA | b33, b52 (TU0) & b102 |
+| Perfect Dark Zero | TU0,TU3 & Platinum Hits base |
 | Halo 3 | TU0/TU3 & 08172 'delta' |
 | Halo 3: ODST | |
 | Halo Reach | TU0/TU1 |
