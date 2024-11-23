@@ -39,6 +39,7 @@ struct GameBuildAddrs {
   const char* build_string;
   uint32_t build_string_addr;
   uint32_t base_address;
+  uint32_t base_address_multi;
   uint32_t cover_flag_offset;
   uint32_t x_offset;
   uint32_t y_offset;
@@ -60,15 +61,17 @@ struct GameBuildAddrs {
 
 std::map<PerfectDarkZeroGame::GameBuild, GameBuildAddrs> supported_builds{
     {PerfectDarkZeroGame::GameBuild::PerfectDarkZero_TU0,
-     {"09.11.05.0052", 0x820CED70, 0x82D2AD38, 0x16B9, 0x150, 0x1674, 0x16AB,
+     {"09.11.05.0052", 0x820CED70, 0x82D2AD38,NULL ,0x16B9, 0x150, 0x1674, 0x16AB,
       0x5C, 0x3A0, 0x39C, 0x1670, 0xF9C, 0xFA0, 0x82D68320, 0x82E1B930,
       0x820EC228, 0x16A3}},
     {PerfectDarkZeroGame::GameBuild::PerfectDarkZero_TU3,
-     {"19.09.06.0082", 0x820CD9E0, 0x82D2B758, 0x16B9, 0x150, 0x1674, 0x16AB,
+     {"19.09.06.0082", 0x820CD9E0, 0x82E3C3E8, 0x82E34224, 0x16B9, 0x150, 0x1674,
+      0x16AB,
       0x5C, 0x3A0, 0x39C, 0x1670, 0xF9C, 0xFA0, 0x82D69048, 0x82D3EED0,
       0x820EAF40, 0x16A3}},
     {PerfectDarkZeroGame::GameBuild::PerfectDarkZero_PlatinumHitsTU15,
-     {"12.09.06.0081", 0x820CD9C0, 0x82E3C3E8, 0x16B9, 0x150, 0x1674, 0x16AB,
+     {"12.09.06.0081", 0x820CD9C0, 0x82E3C3E8, NULL, 0x16B9, 0x150, 0x1674,
+      0x16AB,
       0x5C, 0x3A0, 0x39C, 0x1670, 0xF9C, 0xFA0, 0x82D69048, NULL, 0x820EAF20,
       0x16A3}}};
 
@@ -123,6 +126,15 @@ bool PerfectDarkZeroGame::DoHooks(uint32_t user_index,
   xe::be<uint32_t>* base_address =
       kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
           supported_builds[game_build_].base_address);
+  if (supported_builds[game_build_].base_address_multi != NULL) {
+    xe::be<uint32_t>* base_address_multi =
+        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+            supported_builds[game_build_].base_address_multi);
+    if (*base_address_multi != NULL) {
+      base_address = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+          *base_address_multi + 0x3C4);
+    }
+  }
 
   xe::be<uint32_t>* radians_x_base =
       kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(*base_address +
