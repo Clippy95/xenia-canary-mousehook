@@ -208,6 +208,8 @@ class UserProfile {
 
   std::string GetPresenceString();
 
+  uint32_t GetCachedFlags() const { return account_info_.GetCachedFlags(); };
+
   void AddSetting(std::unique_ptr<UserSetting> setting);
   UserSetting* GetSetting(uint32_t setting_id);
 

@@ -626,6 +626,8 @@ struct X_XAMACCOUNTINFO {
                              AccountReservedFlags::kLiveEnabled);
   }
 
+  uint32_t GetCachedFlags() const { return cached_user_flags; };
+
   uint32_t GetCountry() const {
     return (cached_user_flags & kCountryMask) >> 8;
   }
