@@ -1932,7 +1932,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
         selected_title_index, 0, (int)recently_launched_titles_.size() - 1);
 
     // Must clear dialogs to prevent stacking
-    imgui_drawer_.get()->ClearDialogs();
+    ClearDialogs();
 
     // Titles may contain Unicode characters such as At World’s End
     // Must use ImGUI font that can render these Unicode characters
@@ -2211,7 +2211,7 @@ void EmulatorWindow::DisplayHotKeysConfig() {
   msg += "Controller Hotkeys: " +
          xe::string_util::BoolToString(cvars::controller_hotkeys);
 
-  imgui_drawer_.get()->ClearDialogs();
+  ClearDialogs();
   xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(), "Controller Hotkeys",
                                       msg);
 }
@@ -2243,7 +2243,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(
 
     XELOGE("{}", log_msg);
 
-    imgui_drawer_.get()->ClearDialogs();
+    ClearDialogs();
 
     xe::ui::ImGuiDialog::ShowMessageBox(imgui_drawer_.get(),
                                         "Title Launch Failed!", log_msg);
@@ -2290,7 +2290,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(
     display_config_dialog_.reset();
   }
 
-  imgui_drawer_.get()->ClearDialogs();
+  ClearDialogs();
 
   if (result) {
     XELOGE("Failed to launch target: {:08X}", result);
@@ -2416,6 +2416,19 @@ void EmulatorWindow::AddRecentlyLaunchedTitle(
                      std::ofstream::trunc);
   file << toml_table;
   file.close();
+}
+
+void EmulatorWindow::ClearDialogs() {
+  if (profile_config_dialog_) {
+    profile_config_dialog_.reset();
+  }
+
+  if (display_config_dialog_) {
+    display_config_dialog_.reset();
+  }
+
+  imgui_drawer_.get()->ClearDialogs();
+  kernel::xam::xam_dialogs_shown_ = 0;
 }
 
 }  // namespace app
