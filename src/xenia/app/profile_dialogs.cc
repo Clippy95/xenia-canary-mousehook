@@ -52,22 +52,14 @@ void CreateProfileDialog::OnDraw(ImGuiIO& io) {
   ImGui::TextUnformatted("Gamertag:");
   ImGui::InputText("##Gamertag", gamertag_, sizeof(gamertag_));
 
-  ImGui::Checkbox("Xbox Live Enabled", &live_enabled);
-
   const std::string gamertag_string = std::string(gamertag_);
   bool valid = profile_manager->IsGamertagValid(gamertag_string);
 
   ImGui::BeginDisabled(!valid);
   if (ImGui::Button("Create")) {
-    bool autologin = (profile_manager->GetProfilesCount() == 0);
-    uint32_t reserved_flags = 0;
-
-    if (live_enabled) {
-      reserved_flags |= X_XAMACCOUNTINFO::AccountReservedFlags::kLiveEnabled;
-    }
-
-    if (profile_manager->CreateProfile(gamertag_string, autologin, migration_,
-                                       reserved_flags) &&
+    bool autologin = (profile_manager->GetAccountCount() == 0);
+    if (profile_manager->CreateProfile(gamertag_string, autologin,
+                                       migration_) &&
         migration_) {
       emulator_window_->emulator()->DataMigration(0xB13EBABEBABEBABE);
     }
@@ -97,7 +89,7 @@ void NoProfileDialog::OnDraw(ImGuiIO& io) {
                              ->xam_state()
                              ->profile_manager();
 
-  if (profile_manager->GetProfilesCount()) {
+  if (profile_manager->GetAccountCount()) {
     delete this;
     return;
   }
@@ -172,7 +164,7 @@ void ProfileConfigDialog::OnDraw(ImGuiIO& io) {
     return;
   }
 
-  auto profiles = profile_manager->GetProfiles();
+  auto profiles = profile_manager->GetAccounts();
 
   ImGui::SetNextWindowPos(ImVec2(40, 40), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowBgAlpha(0.8f);

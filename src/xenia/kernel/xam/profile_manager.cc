@@ -485,6 +485,14 @@ bool ProfileManager::CreateProfile(const std::string gamertag, bool autologin,
   return is_account_created;
 }
 
+const X_XAMACCOUNTINFO* ProfileManager::GetAccount(const uint64_t xuid) {
+  if (!accounts_.count(xuid)) {
+    return nullptr;
+  }
+
+  return &accounts_[xuid];
+}
+
 bool ProfileManager::CreateAccount(const uint64_t xuid,
                                    const std::string gamertag,
                                    uint32_t reserved_flags) {
