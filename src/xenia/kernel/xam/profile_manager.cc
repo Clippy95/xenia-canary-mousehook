@@ -402,7 +402,7 @@ uint8_t ProfileManager::FindFirstFreeProfileSlot() const {
       return i;
     }
   }
-  return -1;
+  return XUserIndexAny;
 }
 
 std::bitset<XUserMaxUserCount> ProfileManager::GetUsedUserSlots() const {
@@ -431,7 +431,7 @@ uint8_t ProfileManager::GetUserIndexAssignedToProfile(
 
     return index;
   }
-  return -1;
+  return XUserIndexAny;
 }
 
 std::filesystem::path ProfileManager::GetProfileContentPath(
