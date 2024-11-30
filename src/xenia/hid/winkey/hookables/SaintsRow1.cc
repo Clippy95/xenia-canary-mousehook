@@ -45,10 +45,15 @@ struct GameBuildAddrs {
   uint32_t map_x_address;
   uint32_t map_zoom_address;
   uint32_t pause_screen_section_address;
+  uint32_t map_open_flag_address;
   uint32_t vehicle_address;
   uint32_t weapon_wheel_address;
   uint32_t weapon_wheel_slot_address;
   uint32_t menu_status_address;
+  // ACTUAL pause flag, menu_status_address acts more like if can player control
+  // (kind of the real player paused controls flag is at 0x8283CA7B, will need
+  // to use this if problems arise.)
+  uint32_t world_paused_address;
   uint32_t havok_frametime_address;
   uint32_t current_frametime_address;  //       x_axis_addition =
                                        //       -(float)((float)_FP12 /
@@ -63,15 +68,21 @@ struct GameBuildAddrs {
   uint32_t change_weapon_function_addr;
   uint32_t limit_weapons_function_addr;
   uint32_t allowable_weapons_melee_array;
+  uint32_t can_spin_player_flag_addr;
+  uint32_t rims_jobs_address_ptr;
+  uint32_t customization_screen_zoom_level_addr;
 };
 
 std::map<SaintsRow1Game::GameBuild, GameBuildAddrs> supported_builds{
     {SaintsRow1Game::GameBuild::Unknown, {" ", NULL, NULL}},
     {SaintsRow1Game::GameBuild::SaintsRow1_TU1,
-     {"1.0.1",    0x827f9af8, 0x827F9B00, 0x827F9BA4, 0x82F7EB04, 0x835F2B80,
-      0x827CF9CC, 0x835F279B, 0x82932407, 0x8283CA7B, 0x835F2883, 0x835F27A3,
-      0x835F2684, 0x827CA69C, 0x827F9AD8, 0x827F9B58, 0x827F99C7, 0x827F956C,
-      0x822AEB78, 0x822ADC10, 0x827D0484}}};
+     {
+         "1.0.1",    0x827f9af8, 0x827F9B00, 0x827F9BA4, 0x82F7EB04, 0x835F2B80,
+         0x827CF9CC, 0x835F279B, 0x82EE10DC, 0x82932407, 0x8283CA7B, 0x835F2883,
+         0x835F27A3, 0x835F2527, 0x835F2684, 0x827CA69C, 0x827F9AD8, 0x827F9B58,
+         0x827F99C7, 0x827F956C, 0x822AEB78, 0x822ADC10, 0x827D0484, 0x835F1A58,
+         0x837DD080, 0x827F95B4,
+     }}};
 
 SaintsRow1Game::~SaintsRow1Game() = default;
 
@@ -111,7 +122,6 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
     return false;
   }
 
-  // REMOVE THIS FOR RELEASE NEEDS TO BE A PATCH!
   // xtbl edits can't be made into a patch most likely?
   xe::be<float>* ingamesens_x =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -148,10 +158,6 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   float frametime = *ingame_frametime;
   if (cvars::sr_havok_fix_frametime && !isTervelPlugin())
     FixHavokFrameTime(frametime);
-
-  // float correctFrametime = 1 / *currentFPS;
-
-  //*frametime = correctFrametime * 2;
 
   auto now = std::chrono::steady_clock::now();
   auto elapsed_x = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -207,10 +213,20 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
     return false;
   player = *kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
       supported_builds[game_build_].player_address);
-  if (inMapScreen()) MapCursor(input_state);
 
-  if (isPaused()) return false;
-  WeaponWheelScrollWheel(input_state);
+  if (isPaused()) {
+    if (inMapScreen()) MapCursor(input_state);
+    if (*kernel_memory()->TranslateVirtual<uint8_t*>(
+            supported_builds[game_build_].world_paused_address) != 0) {
+      return false;
+    }
+    if (RotatePlayerinCustomization(input_state) == true) {
+      return false;
+    }
+
+    return false;
+  }
+  if (input_state.mouse.wheel_delta) WeaponWheelScrollWheel(input_state);
   xe::be<float>* addition_x = kernel_memory()->TranslateVirtual<xe::be<float>*>(
       supported_builds[game_build_].x_address);
 
@@ -252,8 +268,9 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
   // division over 1350 is assuming if frametime is 1/30, this should fix
   // sensitivity fluctuation due to framerate as that's what the game does at
   // 8249DD28(TU1); x_axis_addition = -(float)((float)_FP12 / frametime);
-  // stuttering might still occur due to framerates, as it's expected each
-  // frame? -= isn't ideal but that's the only way it works. - Clippy95
+  // stuttering might still occur due to framerates, as it's expected to be set
+  // frame? -= isn't the ideal method but doing = causes it be less accurate
+  // somehow. - Clippy95
   if (!cvars::invert_x) {
     degree_x +=
         ((input_state.mouse.x_delta / divider_x) * (float)cvars::sensitivity) /
@@ -347,14 +364,86 @@ bool SaintsRow1Game::isPaused() {
     return false;
 }
 
+bool SaintsRow1Game::RotatePlayerinCustomization(RawInputState& input_state) {
+  if (player == NULL) return false;
+  auto* canspinplayer = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].can_spin_player_flag_addr);
+  if (*canspinplayer != 1) return false;
+
+  float mousex =
+      (input_state.mouse.x_delta / 5.f) * (float)cvars::menu_sensitivity;
+  xe::be<float>* zoom_level = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[game_build_].customization_screen_zoom_level_addr);
+
+  // this is absoloute player rotation, this isn't fixed to the player
+  // customization screens
+  xe::be<float>* player_x_sin =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(player + 0x40);
+
+  xe::be<float>* player_x_cos =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(player + 0x38);
+
+  float min_zoom = 0.75f;
+  float max_zoom = 3.f;
+  if (vehicle_status == 1) {  // maybe read of rims jobs flags instead?
+                              // 828522D5,828527FD, 82852A91, 82852D25
+    min_zoom = 3.f;
+    max_zoom = 9.f;
+    xe::be<uint32_t>* rims_jobs_vehicle_pointer = multi_pointer(
+        supported_builds[game_build_].rims_jobs_address_ptr, {0x20, 0x98});
+    if (*rims_jobs_vehicle_pointer == NULL) return false;
+    player_x_sin = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+        *rims_jobs_vehicle_pointer + 0x40);
+    player_x_cos = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+        *rims_jobs_vehicle_pointer + 0x38);
+    mousex = std::clamp(mousex, -24.f,
+                        24.f);  // random value to limit mouse delta otherwise
+                                // the cars starts freaking out
+  }
+
+  float zoom = *zoom_level;
+  zoom = RadianstoDegree(zoom);  // probably not really in radians..
+  zoom -= input_state.mouse.wheel_delta / 7.5f;
+  zoom += (input_state.mouse.y_delta / 8.f) * (float)cvars::menu_sensitivity;
+  *zoom_level = std::clamp(DegreetoRadians(zoom), min_zoom, max_zoom);
+  float x = atan2(*player_x_sin, *player_x_cos);
+  x = RadianstoDegree(x);
+
+  x += mousex;
+  if (x > 180.0f) {
+    x -= 360.0f;
+  } else if (x < -180.0f) {
+    x += 360.0f;
+  }
+  x = DegreetoRadians(x);
+  *player_x_sin = sin(x);
+  *player_x_cos = cos(x);
+  return true;
+}
+
+bool SaintsRow1Game::CantSwitchWeapons() {
+  if (isAnimStatus(animstatus::DEAD) || isAnimStatus(animstatus::JUMPING) ||
+      isAnimStatus(animstatus::RAGDOLL) ||
+      IsPlayerStatus1(playerstatus1::BUSY) ||
+      IsPlayerStatus1(playerstatus1::SPRINTING) ||
+      IsPlayerStatus1(playerstatus1::STANDINGUP) ||
+      IsPlayerStatus1(playerstatus1::JUMPING1))
+    return true;
+  else
+    return false;
+}
+
 void SaintsRow1Game::WeaponWheelScrollWheel(RawInputState& input_state) {
-  if (player == NULL) return;
+  if (player == NULL || isAnimStatus(animstatus::DEAD)) return;
+  // This probably works fine but might need more testing, and It'd be more
+  // accurate to the SR2 PC port,BUT I prefer being able to switch weapons while
+  // sprinting, make this part of a WeaponSwitchHandler cvar in the future?
+  // if (CantSwitchWeapons()) return;
 
   auto* weapon_slot = kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].weapon_wheel_slot_address);
   xe::be<uint32_t>* current_weapon =
-      kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-          player + 0xDDC);  // CLIPPY TODO:  use player ptr + 0x914 for this.
+      kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(player + 0xDDC);
 
   if (input_state.mouse.wheel_delta) {
     SelectableWeaponsHack();  // controls if we can use the 4
@@ -370,6 +459,10 @@ void SaintsRow1Game::WeaponWheelScrollWheel(RawInputState& input_state) {
     bool weapon_switched = false;
 
     int direction = (input_state.mouse.wheel_delta > 0) ? 1 : -1;
+
+    if (cvars::swap_wheel) {
+      direction = -direction;
+    }
 
     for (int attempts = 0; attempts < 8; ++attempts) {
       slot = (slot + direction + 8) % 8;
@@ -394,7 +487,12 @@ bool SaintsRow1Game::inMapScreen() {
   auto* pause_screen = kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].pause_screen_section_address);
 
-  if (*pause_screen == 26 && isPaused())
+  xe::be<uint16_t>* map_usable =
+      kernel_memory()->TranslateVirtual<xe::be<uint16_t>*>(
+          supported_builds[game_build_].map_open_flag_address);
+
+  // current map usable is shared with rotating player menus, find a better one.
+  if ((*pause_screen == 26 || *map_usable == 0x82EE) && isPaused())
     return true;
   else
     return false;
@@ -441,30 +539,23 @@ void SaintsRow1Game::MapCursor(RawInputState& input_state) {
   *map_zoom_be = map_zoom;
 }
 
-uint64_t SaintsRow1Game::call_argless_function(uint32_t function_address) {
+void SaintsRow1Game::call_argless_function(uint32_t function_address) {
   XThread* current_thread = XThread::GetCurrentThread();
-
   if (!current_thread) {
-    return 0;
+    return;
   }
-
   kernel_state()->processor()->Execute(current_thread->thread_state(),
                                        function_address);
-
-  uint64_t return_value = current_thread->thread_state()->context()->r[3];
-
-  return return_value != 0;
+  return;
 }
 
 std::string SaintsRow1Game::ChooseBinds() {
   wheel_status = kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].weapon_wheel_address);
-  auto* menu_status = kernel_memory()->TranslateVirtual<uint8_t*>(
-      supported_builds[game_build_].menu_status_address);
   vehicle_status = *kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].vehicle_address);
 
-  if (*wheel_status == 1 || (menu_status && *menu_status != 2)) {
+  if (*wheel_status == 1 || isPaused()) {
     return "Default";
   }
   if (vehicle_status && vehicle_status == 1) {
@@ -499,12 +590,23 @@ bool SaintsRow1Game::ModifierKeyHandler(uint32_t user_index,
   return true;
 }
 
-bool SaintsRow1Game::isStatus(uint8_t type) {
+bool SaintsRow1Game::isAnimStatus(uint8_t type) {
   if (player == NULL) return false;
   auto* anim_status =
       kernel_memory()->TranslateVirtual<uint8_t*>(player + 0x1FF);
 
   if (*anim_status == type)
+    return true;
+  else
+    return false;
+}
+
+bool SaintsRow1Game::IsPlayerStatus1(uint32_t type) {
+  if (player == NULL) return false;
+  auto* player_status1 =
+      kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(player + 0x1180);
+
+  if (*player_status1 == type)
     return true;
   else
     return false;
@@ -529,12 +631,12 @@ void SaintsRow1Game::SelectableWeaponsHack() {
   auto* rpg_slot = kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].allowable_weapons_melee_array + 0x64);
 
-  if (isStatus(animstatus::DRIVING) && vehicle_status) {
+  if (isAnimStatus(animstatus::DRIVING) && vehicle_status) {
     *melee_slot = 1;
     *shotgun_slot = 1;
     *ar_slot = 1;
     *rpg_slot = 1;
-  } else if (isStatus(animstatus::PASSANGER) && vehicle_status) {
+  } else if (isAnimStatus(animstatus::PASSANGER) && vehicle_status) {
     *melee_slot = 1;
     *shotgun_slot = 0;
     *ar_slot = 0;
@@ -551,15 +653,18 @@ void SaintsRow1Game::WeaponSwitchHandler(uint32_t user_index,
                                          RawInputState& input_state,
                                          X_INPUT_STATE* out_state, int weapon,
                                          uint16_t buttons) {
-  if (!isPaused()) {
-    auto* weapon_slot = kernel_memory()->TranslateVirtual<uint8_t*>(
-        supported_builds[game_build_].weapon_wheel_slot_address);
-    SelectableWeaponsHack();
-    if (weapon) {
-      *weapon_slot = std::clamp(weapon - 1, 0, 7);
-      call_argless_function(
-          supported_builds[game_build_].change_weapon_function_addr);
-    }
+  if (isPaused() || isAnimStatus(animstatus::DEAD)) return;
+  // This probably works fine but might need more testing, and It'd be more
+  // accurate to the SR2 PC port,BUT I prefer being able to switch weapons while
+  // sprinting, make this part of a WeaponSwitchHandler cvar in the future?
+  // if (CantSwitchWeapons()) return;
+  auto* weapon_slot = kernel_memory()->TranslateVirtual<uint8_t*>(
+      supported_builds[game_build_].weapon_wheel_slot_address);
+  SelectableWeaponsHack();
+  if (weapon) {
+    *weapon_slot = std::clamp(weapon - 1, 0, 7);
+    call_argless_function(
+        supported_builds[game_build_].change_weapon_function_addr);
   }
 }
 
