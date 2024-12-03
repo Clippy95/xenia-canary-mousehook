@@ -18,6 +18,7 @@
 #include "xenia/ui/virtual_key.h"
 #include "xenia/ui/window.h"
 
+#include "xenia/hid/winkey/hookables/Battlefield.h"
 #include "xenia/hid/winkey/hookables/CallOfDuty.h"
 #include "xenia/hid/winkey/hookables/Crackdown2.h"
 #include "xenia/hid/winkey/hookables/DeadRising.h"
@@ -465,6 +466,7 @@ WinKeyInputDriver::WinKeyInputDriver(xe::ui::Window* window,
   hookable_games_.push_back(std::move(std::make_unique<GearsOfWarsGame>()));
   hookable_games_.push_back(std::move(std::make_unique<DeadRisingGame>()));
   hookable_games_.push_back(std::move(std::make_unique<CallOfDutyGame>()));
+  hookable_games_.push_back(std::move(std::make_unique<BattlefieldGame>()));
   hookable_games_.push_back(std::move(std::make_unique<MinecraftGame>()));
 
   auto path = std::filesystem::current_path() / "bindings.ini";
