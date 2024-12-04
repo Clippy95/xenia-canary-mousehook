@@ -400,17 +400,11 @@ static dword_result_t XamShowMessageBoxUi(
     buttons.push_back(xe::to_utf8(button));
   }
 
-  auto title_id = kernel_state()->title_id();
-
   X_RESULT result;
-  if (cvars::headless || title_id == 0x584109C2) {
-    uint32_t active_btn = active_button;
-    if (title_id == 0x584109C2 && active_btn == 0) {
-      active_btn = 1;
-    }
+  if (cvars::headless) {
     // Auto-pick the focused button.
-    auto run = [result_ptr, active_btn]() -> X_RESULT {
-      *result_ptr = static_cast<uint32_t>(active_btn);
+    auto run = [result_ptr, active_button]() -> X_RESULT {
+      *result_ptr = static_cast<uint32_t>(active_button);
       return X_ERROR_SUCCESS;
     };
     result = xeXamDispatchHeadless(run, overlapped);
@@ -900,33 +894,52 @@ bool xeDrawProfileContent(ui::ImGuiDrawer* imgui_drawer, const uint64_t xuid,
   auto profile_manager = kernel_state()->xam_state()->profile_manager();
 
   const float default_image_size = 75.0f;
-  auto position = ImGui::GetCursorPos();
-  const float selectable_height =
-      ImGui::GetTextLineHeight() *
-      5;  // 3 is for amount of lines of text behind image/object.
-  const auto font = imgui_drawer->GetIO().Fonts->Fonts[0];
+  const ImVec2 drawing_start_position = ImGui::GetCursorPos();
+  ImVec2 current_drawing_position = ImGui::GetCursorPos();
 
-  const auto text_size = font->CalcTextSizeA(
-      font->FontSize, FLT_MAX, -1.0f,
-      fmt::format("XUID: {:016X}\n", 0xB13EBABEBABEBABE).c_str());
+  // In the future it can be replaced with profile icon.
+  ImGui::Image(user_index < XUserMaxUserCount
+                   ? imgui_drawer->GetNotificationIcon(user_index)
+                   : nullptr,
+               ImVec2(default_image_size, default_image_size));
 
-  const auto image_scale = selectable_height / default_image_size;
-  const auto image_size = ImVec2(default_image_size * image_scale,
-                                 default_image_size * image_scale);
+  ImGui::SameLine();
+  current_drawing_position = ImGui::GetCursorPos();
+  ImGui::TextUnformatted(
+      fmt::format("User: {}\n", account->GetGamertagString()).c_str());
+
+  ImGui::SameLine();
+  ImGui::SetCursorPos(current_drawing_position);
+  ImGui::SetCursorPosY(current_drawing_position.y + ImGui::GetTextLineHeight());
+  ImGui::TextUnformatted(fmt::format("XUID: {:016X}  \n", xuid).c_str());
+
+  ImGui::SameLine();
+  ImGui::SetCursorPos(current_drawing_position);
+  ImGui::SetCursorPosY(current_drawing_position.y +
+                       2 * ImGui::GetTextLineHeight());
+
+  if (user_index != XUserIndexAny) {
+    ImGui::TextUnformatted(
+        fmt::format("Assigned to slot: {}\n", user_index + 1).c_str());
+  } else {
+    ImGui::TextUnformatted(fmt::format("Profile is not signed in").c_str());
+  }
+
+  const ImVec2 drawing_end_position = ImGui::GetCursorPos();
 
   if (xuid && selected_xuid) {
-    // This includes 10% to include empty spaces between border and elements.
-    auto selectable_region_size =
-        ImVec2((image_size.x + text_size.x) * 1.10f, selectable_height);
+    ImGui::SetCursorPos(drawing_start_position);
 
-    if (ImGui::Selectable("##Selectable", *selected_xuid == xuid,
-                          ImGuiSelectableFlags_SpanAllColumns,
-                          selectable_region_size)) {
+    if (ImGui::Selectable(
+            "##Selectable", *selected_xuid == xuid,
+            ImGuiSelectableFlags_SpanAllColumns,
+            ImVec2(drawing_end_position.x - drawing_start_position.x,
+                   drawing_end_position.y - drawing_start_position.y))) {
       *selected_xuid = xuid;
     }
 
     if (ImGui::BeginPopupContextItem("Profile Menu")) {
-      if (user_index == static_cast<uint8_t>(-1)) {
+      if (user_index == XUserIndexAny) {
         if (ImGui::MenuItem("Login")) {
           profile_manager->Login(xuid);
         }
@@ -994,46 +1007,6 @@ bool xeDrawProfileContent(ui::ImGuiDrawer* imgui_drawer, const uint64_t xuid,
       }
       ImGui::EndPopup();
     }
-  }
-
-  ImGui::SameLine();
-  ImGui::SetCursorPos(position);
-
-  // In the future it can be replaced with profile icon.
-  ImGui::Image(user_index < XUserMaxUserCount
-                   ? imgui_drawer->GetNotificationIcon(user_index)
-                   : nullptr,
-               ImVec2(default_image_size * image_scale,
-                      default_image_size * image_scale));
-
-  ImGui::SameLine();
-  position = ImGui::GetCursorPos();
-  ImGui::TextUnformatted(
-      fmt::format("User: {}\n", account->GetGamertagString()).c_str());
-
-  ImGui::SameLine();
-  ImGui::SetCursorPos(position);
-  ImGui::SetCursorPosY(position.y + ImGui::GetTextLineHeight());
-  ImGui::TextUnformatted(fmt::format("XUID: {:016X}\n", xuid).c_str());
-
-  ImGui::SameLine();
-  ImGui::SetCursorPos(position);
-  ImGui::SetCursorPosY(position.y + 2 * ImGui::GetTextLineHeight());
-
-  if (user_index != static_cast<uint8_t>(-1)) {
-    const std::string live_enabled = fmt::format(
-        "Xbox Live Enabled: {}", account->IsLiveEnabled() ? "True" : "False");
-
-    ImGui::TextUnformatted(live_enabled.c_str());
-
-    ImGui::SameLine();
-    ImGui::SetCursorPos(position);
-    ImGui::SetCursorPosY(position.y + 3 * ImGui::GetTextLineHeight());
-
-    ImGui::TextUnformatted(
-        fmt::format("Assigned to slot: {}\n", user_index + 1).c_str());
-  } else {
-    ImGui::TextUnformatted(fmt::format("Profile is not signed in").c_str());
   }
 
   return true;
