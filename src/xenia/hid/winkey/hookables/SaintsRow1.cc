@@ -35,7 +35,10 @@ const uint32_t kTitleIdSaintsRow1 = 0x545107D1;
 namespace xe {
 namespace hid {
 namespace winkey {
-struct GameBuildAddrs {
+bool __inline IsKeyDown(uint8_t key) {
+  return (GetAsyncKeyState(key) & 0x8000) == 0x8000;
+}
+  struct GameBuildAddrs {
   const char* title_version;
   uint32_t x_address;
   uint32_t y_address;
@@ -611,13 +614,15 @@ bool SaintsRow1Game::IsPlayerStatus1(uint32_t type) {
 void SaintsRow1Game::SelectableWeaponsHack() {
   /*Opening weapon wheel does call limit_weapons_function_addr correctly, so
    * skip our attempt at re-creating it.*/
-  auto* food_selector =
-      kernel_memory()
-          ->TranslateVirtual<xe::be<uint32_t>*>(  // possibily signed? for our
-                                                  // purpose
-                                                  // it doesn't matter.
-              supported_builds[game_build_].food_wheel_object_address);
-  *food_selector = 0;
+  if (!IsKeyDown(VK_CONTROL)) {
+    auto* food_selector =
+        kernel_memory()
+            ->TranslateVirtual<xe::be<uint32_t>*>(  // possibily signed? for our
+                                                    // purpose
+                                                    // it doesn't matter.
+                supported_builds[game_build_].food_wheel_object_address);
+    *food_selector = 0;
+  }
   if (*wheel_status) return;
   call_argless_function(
       supported_builds[game_build_]
@@ -665,8 +670,36 @@ void SaintsRow1Game::WeaponSwitchHandler(uint32_t user_index,
   auto* weapon_slot = kernel_memory()->TranslateVirtual<uint8_t*>(
       supported_builds[game_build_].weapon_wheel_slot_address);
   SelectableWeaponsHack();
-  if (weapon) {
+  if (weapon && !IsKeyDown(VK_CONTROL)) {
     *weapon_slot = std::clamp(weapon - 1, 0, 7);
+    call_argless_function(
+        supported_builds[game_build_].change_weapon_function_addr);
+  } else if (weapon && IsKeyDown(VK_CONTROL)) {
+    auto* player_busy =
+        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(player + 0x2F4);
+    if (*player_busy != 0xFFFFFFFF) return;
+    auto* food_selector = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        supported_builds[game_build_].food_wheel_object_address);
+    auto* food_objects_list = multi_pointer(
+        supported_builds[game_build_].player_address, {0x948, 0x0});
+    if (*food_objects_list == NULL) return;
+    auto* down = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        *food_objects_list + 0x0);
+    auto* up = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        *food_objects_list + 0x4);
+    auto* left = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        *food_objects_list + 0x18);
+    auto* right = kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
+        *food_objects_list + 0x1C);
+    if (weapon == 1)
+      *food_selector = *left;
+    else if (weapon == 2)
+      *food_selector = *up;
+    else if (weapon == 3)
+      *food_selector = *down;
+    else if (weapon == 4)
+      *food_selector = *right;
+
     call_argless_function(
         supported_builds[game_build_].change_weapon_function_addr);
   }
