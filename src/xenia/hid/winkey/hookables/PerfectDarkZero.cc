@@ -250,8 +250,8 @@ bool PerfectDarkZeroGame::DoHooks(uint32_t user_index,
     float set_fov_multiplier = 1.0f;
     static float fovscale_l = 1.0f;
     xe::be<uint32_t>* base_address_fov =
-        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-            supported_builds[game_build_].fovscale_address);
+        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(*base_address +
+                                                             0x19A4);
     if (!base_address_fov || *base_address_fov != NULL) {
       xe::be<uint32_t> fovscale_address = *base_address_fov + 0x440;
       xe::be<uint32_t> fovscale_sanity = *base_address_fov + 0x660;
@@ -427,8 +427,7 @@ bool PerfectDarkZeroGame::isSpecialCam(xe::be<uint32_t>* player,
     }
   } else {
     xe::be<uint32_t>* base_address =
-        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(
-            supported_builds[game_build_].fovscale_address);
+        kernel_memory()->TranslateVirtual<xe::be<uint32_t>*>(*player + +0x19A4);
 
     if (!base_address || *base_address == 0) {
       return false;
