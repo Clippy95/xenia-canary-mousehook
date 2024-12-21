@@ -201,8 +201,8 @@ void upnp::remove_port(uint16_t internal_port, std::string_view protocol) {
 
   remove_port_external(external_port, protocol);
 
-  //assert_true(m_port_bindings.at(str_protocol).erase(internal_port));
-  //assert_true(m_mapped_bind_ports.erase(internal_port));
+  // assert_true(m_port_bindings.at(str_protocol).erase(internal_port));
+  // assert_true(m_mapped_bind_ports.erase(internal_port));
 
   XELOGE("Successfully deleted port mapping {} to IGD:{}({})", internal_port,
          external_port, protocol);
@@ -261,7 +261,7 @@ uint16_t upnp::get_mapped_connect_port(uint16_t external_port) {
     if (cvars::logging) {
       XELOGW("No mapped connect port found for {}!", external_port);
     }
-    
+
     return external_port;
   }
 }
@@ -278,7 +278,7 @@ uint16_t upnp::get_mapped_bind_port(uint16_t external_port) {
     if (cvars::logging) {
       XELOGW("No mapped bind port found for {}!", external_port);
     }
-    
+
     return external_port;
   }
 }

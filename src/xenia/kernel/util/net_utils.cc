@@ -18,9 +18,7 @@ MacAddress::MacAddress(const uint8_t* macaddress) {
   }
 }
 
-MacAddress::MacAddress(uint64_t macaddress) { 
-    mac_address_[0] = 0; 
-}
+MacAddress::MacAddress(uint64_t macaddress) { mac_address_[0] = 0; }
 MacAddress::~MacAddress() {}
 
 uint8_t* MacAddress::raw() { return mac_address_; }

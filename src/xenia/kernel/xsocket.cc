@@ -134,8 +134,6 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 }
 
 X_STATUS XSocket::Connect(const XSOCKADDR* name, int name_len) {
-
-
   sockaddr_storage n_name;
   auto family_size =
       offsetof(sockaddr_storage, ss_family) + sizeof(n_name.ss_family);
@@ -580,8 +578,6 @@ int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
     nto.ss_family = to->address_family;
     std::memcpy(reinterpret_cast<uint8_t*>(&nto) + family_size, to->sa_data,
                 to_len - family_size);
-
-
   }
 
   auto addrin = reinterpret_cast<sockaddr_in*>(&nto);
