@@ -35,6 +35,9 @@ const uint32_t kTitleIdSaintsRow1 = 0x545107D1;
 namespace xe {
 namespace hid {
 namespace winkey {
+bool __inline IsKeyDown(uint8_t key) {
+  return (GetAsyncKeyState(key) & 0x8000) == 0x8000;
+}
 struct GameBuildAddrs {
   const char* title_version;
   uint32_t x_address;
@@ -206,6 +209,8 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
       }
     }
   }
+
+  HandleZoomInput();
 
   if ((!input_state.mouse.x_delta && !input_state.mouse.y_delta &&
        !input_state.mouse.wheel_delta))
@@ -428,6 +433,57 @@ bool SaintsRow1Game::CantSwitchWeapons() {
     return true;
   else
     return false;
+}
+
+void SaintsRow1Game::HandleZoomInput() {
+  // Define zoom levels
+  const float zoom_levels[] = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
+  const int zoom_levels_count = sizeof(zoom_levels) / sizeof(zoom_levels[0]);
+
+  static int current_zoom_index = 2;  // Start at the middle (0.0f)
+
+  static auto last_press_time = std::chrono::steady_clock::now();
+  const auto delay_between_presses = std::chrono::milliseconds(200);
+
+  auto now = std::chrono::steady_clock::now();
+
+  // Check for input with delay
+  if (now - last_press_time >= delay_between_presses) {
+    if (IsKeyDown(0x4E)) {  // N key to cycle zoom levels
+      current_zoom_index = (current_zoom_index + 1) % zoom_levels_count;
+      last_press_time = now;  // Update last press time
+    }
+  }
+
+  GTACameraModes(zoom_levels[current_zoom_index]);
+}
+
+void SaintsRow1Game::GTACameraModes(float newzoom) {
+  xe::be<float>* vanilla_zoom_address =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(0x827FA404);
+
+  xe::be<float>* modded_zoom_address =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(0x827FA5C0);
+
+  if (*modded_zoom_address == 0.f) {
+    *modded_zoom_address = *vanilla_zoom_address;
+  }
+
+  float modzoom = *modded_zoom_address;
+  float compare = *vanilla_zoom_address + newzoom;
+
+  const float zoom_step = 0.076f;
+
+  if (std::abs(modzoom - compare) > zoom_step) {
+    if (modzoom < compare) {
+      modzoom += zoom_step;
+    } else {
+      modzoom -= zoom_step;
+    }
+    *modded_zoom_address = modzoom;
+  } else {
+    *modded_zoom_address = compare;
+  }
 }
 
 void SaintsRow1Game::WeaponWheelScrollWheel(RawInputState& input_state) {

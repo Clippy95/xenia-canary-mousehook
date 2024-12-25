@@ -36,6 +36,8 @@ class SaintsRow1Game : public HookableGame {
   bool isPaused();
   bool RotatePlayerinCustomization(RawInputState& input_state);
   bool CantSwitchWeapons();
+  void HandleZoomInput();
+  void GTACameraModes(float newzoom);
   void WeaponWheelScrollWheel(RawInputState& input_state);
   bool inMapScreen();
   void MapCursor(RawInputState& input_state);
