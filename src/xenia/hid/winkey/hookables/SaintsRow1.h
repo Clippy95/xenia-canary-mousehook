@@ -46,6 +46,10 @@ class SaintsRow1Game : public HookableGame {
   bool isAnimStatus(uint8_t type);
   bool IsPlayerStatus1(uint32_t type);
   void SelectableWeaponsHack();
+  bool IsMissionComplete(std::string internal_mission_name,
+                         uint32_t calc_checksum_address,
+                         uint32_t is_mission_complete_C_func_address);
+
   void WeaponSwitchHandler(uint32_t user_index, RawInputState& input_state,
                            X_INPUT_STATE* out_state, int weapon,
                            uint16_t buttons);

@@ -206,7 +206,8 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
       }
     }
   }
-
+  printf("wr07 complete %s \n",
+         IsMissionComplete("wr07", 0x8264DE88, 0x82225FF0) ? "true" : "false");
   if ((!input_state.mouse.x_delta && !input_state.mouse.y_delta &&
        !input_state.mouse.wheel_delta))
     return false;
@@ -225,6 +226,8 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
 
     return false;
   }
+
+  
   if (input_state.mouse.wheel_delta) WeaponWheelScrollWheel(input_state);
   xe::be<float>* addition_x = kernel_memory()->TranslateVirtual<xe::be<float>*>(
       supported_builds[game_build_].x_address);
@@ -654,6 +657,34 @@ void SaintsRow1Game::SelectableWeaponsHack() {
     *ar_slot = 0;
     *rpg_slot = 0;
   }
+}
+
+bool SaintsRow1Game::IsMissionComplete(
+    std::string internal_mission_name,uint32_t calc_checksum_address,
+    uint32_t is_mission_complete_C_func_address) {
+  XThread* current_thread = XThread::GetCurrentThread();
+
+  if (is_mission_complete_C_func_address == NULL ||
+      is_mission_complete_C_func_address == NULL || !current_thread) {
+    return false;
+  }
+  std::string in_game_str = internal_mission_name;
+  uint32_t command_ptr = kernel_state()->memory()->SystemHeapAlloc(100);
+  char* command_addr =
+      kernel_state()->memory()->TranslateVirtual<char*>(command_ptr);
+  strcpy(command_addr, in_game_str.c_str());
+  current_thread->thread_state()->context()->r[3] = command_ptr;
+  current_thread->thread_state()->context()->r[4] = 0;
+  kernel_state()->processor()->Execute(current_thread->thread_state(),
+                                       calc_checksum_address);
+  uint64_t result = current_thread->thread_state()->context()->r[3];
+  current_thread->thread_state()->context()->r[3] = result;
+  kernel_state()->processor()->Execute(current_thread->thread_state(),
+                                       is_mission_complete_C_func_address);
+   result = current_thread->thread_state()->context()->r[3];
+  uint8_t bitmask = *kernel_memory()->TranslateVirtual<uint8_t*>((uint32_t)(result + 0x4));
+  return 1 == (bitmask >> 6 & 1);
+
 }
 
 void SaintsRow1Game::WeaponSwitchHandler(uint32_t user_index,
