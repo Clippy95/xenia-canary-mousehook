@@ -533,6 +533,14 @@ X_RESULT WinKeyInputDriver::GetCapabilities(uint32_t user_index, uint32_t flags,
   return X_ERROR_SUCCESS;
 }
 
+void GetMouseDeltas(int* x_delta, int* y_delta, int* wheel_delta) {
+  if (!x_delta || !y_delta || !wheel_delta) return;
+
+  *x_delta = state.mouse.x_delta;
+  *y_delta = state.mouse.y_delta;
+  *wheel_delta = state.mouse.wheel_delta;
+}
+
 X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
                                      X_INPUT_STATE* out_state) {
   if (!IsKeyboardForUserEnabled(user_index)) {
@@ -552,7 +560,11 @@ X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
   bool weapon_switch = false;
   int weapon = 0;
 
-  RawInputState state;
+  // RawInputState state;
+  state.mouse.x_delta = 0;
+  state.mouse.y_delta = 0;
+  state.mouse.wheel_delta = 0;
+  // memset(&state, 0, sizeof(state));
 
   if (window()->HasFocus() && is_active()) {
     {

@@ -71,6 +71,9 @@
 namespace xe {
 namespace hid {
 namespace winkey {
+static RawInputState state;
+
+void GetMouseDeltas(int* x_delta, int* y_delta, int* wheel_delta);
 
 enum class KeyboardMode { Disabled, Enabled, Passthrough };
 

@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include <xenia/hid/winkey/winkey_input_driver.h>
 #include "xenia/base/logging.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -98,6 +99,24 @@ dword_result_t DmCaptureStackBackTrace_entry(const ppc_context_t& ctx) {
   return X_STATUS_INVALID_PARAMETER;
 }
 DECLARE_XBDM_EXPORT1(DmCaptureStackBackTrace, kDebug, kStub);
+
+dword_result_t DmGetMouseChanges_entry(const ppc_context_t& ctx) {
+  int x;
+  int y;
+  int wheel;
+  xe::hid::winkey::GetMouseDeltas(&x, &y, &wheel);
+
+  uint32_t mouse_x_addr = static_cast<uint32_t>(ctx->r[4]);
+  uint32_t mouse_y_addr = static_cast<uint32_t>(ctx->r[5]);
+  if (!mouse_x_addr || !mouse_y_addr) return XBDM_SUCCESSFUL;
+
+  xe::be<short>* X = ctx->TranslateVirtual<xe::be<short>*>(mouse_x_addr);
+  xe::be<short>* Y = ctx->TranslateVirtual<xe::be<short>*>(mouse_y_addr);
+  *X = x;
+  *Y = y;
+  return XBDM_SUCCESSFUL;
+}
+DECLARE_XBDM_EXPORT1(DmGetMouseChanges, kDebug, kStub);
 
 MAKE_DUMMY_STUB_STATUS(DmGetThreadInfoEx);
 MAKE_DUMMY_STUB_STATUS(DmSetProfilingOptions);
