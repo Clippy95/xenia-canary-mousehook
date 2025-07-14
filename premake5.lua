@@ -216,6 +216,7 @@ filter("platforms:Windows")
     "shlwapi",
     "dxguid",
     "bcrypt",
+	"Soup",
   })
 
 -- Embed the manifest for things like dependencies and DPI awareness.
