@@ -496,11 +496,12 @@ WinKeyInputDriver::WinKeyInputDriver(xe::ui::Window* window,
   auto path = std::filesystem::current_path() / "bindings.ini";
 
   ParseCustomKeyBinding(path.string());
-
+  StartAnalogThread();
   window->AddInputListener(&window_input_listener_, window_z_order);
 }
 
 WinKeyInputDriver::~WinKeyInputDriver() {
+  StopAnalogThread();
   window()->RemoveInputListener(&window_input_listener_);
 }
 
@@ -533,6 +534,166 @@ X_RESULT WinKeyInputDriver::GetCapabilities(uint32_t user_index, uint32_t flags,
   return X_ERROR_SUCCESS;
 }
 
+void WinKeyInputDriver::InitializeAnalogKeyboards() {
+  if (analog_keyboards_initialized_) return;
+
+  using namespace soup;
+  analog_keyboards_ = AnalogueKeyboard::getAll(false);
+  analog_keyboards_initialized_ = true;
+
+  if (!analog_keyboards_.empty()) {
+    XELOGI("Found {} analog keyboard(s)", analog_keyboards_.size());
+    for (const auto& kbd : analog_keyboards_) {
+      XELOGI("  - {}", kbd.name);
+    }
+  }
+}
+
+void WinKeyInputDriver::UpdateAnalogKeyboards() {
+  if (analog_keyboards_.empty()) return;
+
+  analog_values_.clear();
+
+  for (auto& kbd : analog_keyboards_) {
+    if (kbd.disconnected) continue;
+
+    try {
+      auto keys = kbd.getActiveKeys();
+      for (const auto& key : keys) {
+        soup::Key soup_key = key.getSoupKey();
+        float value = key.fvalue;
+        analog_values_[soup_key] = value;
+      }
+    } catch (...) {
+
+    }
+  }
+}
+
+float WinKeyInputDriver::GetAnalogValue(soup::Key soup_key) {
+  std::lock_guard<std::mutex> lock(analog_mutex_);
+  auto it = analog_values_.find(soup_key);
+  return (it != analog_values_.end()) ? it->second : 0.0f;
+}
+
+bool WinKeyInputDriver::HasAnalogKeyboard() {
+  return !analog_keyboards_.empty();
+}
+
+soup::Key WinKeyInputDriver::VirtualKeyToSoupKey(ui::VirtualKey vk) {
+  switch (vk) {
+    case ui::VirtualKey::kA:
+      return soup::KEY_A;
+    case ui::VirtualKey::kB:
+      return soup::KEY_B;
+    case ui::VirtualKey::kC:
+      return soup::KEY_C;
+    case ui::VirtualKey::kD:
+      return soup::KEY_D;
+    case ui::VirtualKey::kE:
+      return soup::KEY_E;
+    case ui::VirtualKey::kF:
+      return soup::KEY_F;
+    case ui::VirtualKey::kG:
+      return soup::KEY_G;
+    case ui::VirtualKey::kH:
+      return soup::KEY_H;
+    case ui::VirtualKey::kI:
+      return soup::KEY_I;
+    case ui::VirtualKey::kJ:
+      return soup::KEY_J;
+    case ui::VirtualKey::kK:
+      return soup::KEY_K;
+    case ui::VirtualKey::kL:
+      return soup::KEY_L;
+    case ui::VirtualKey::kM:
+      return soup::KEY_M;
+    case ui::VirtualKey::kN:
+      return soup::KEY_N;
+    case ui::VirtualKey::kO:
+      return soup::KEY_O;
+    case ui::VirtualKey::kP:
+      return soup::KEY_P;
+    case ui::VirtualKey::kQ:
+      return soup::KEY_Q;
+    case ui::VirtualKey::kR:
+      return soup::KEY_R;
+    case ui::VirtualKey::kS:
+      return soup::KEY_S;
+    case ui::VirtualKey::kT:
+      return soup::KEY_T;
+    case ui::VirtualKey::kU:
+      return soup::KEY_U;
+    case ui::VirtualKey::kV:
+      return soup::KEY_V;
+    case ui::VirtualKey::kW:
+      return soup::KEY_W;
+    case ui::VirtualKey::kX:
+      return soup::KEY_X;
+    case ui::VirtualKey::kY:
+      return soup::KEY_Y;
+    case ui::VirtualKey::kZ:
+      return soup::KEY_Z;
+    case ui::VirtualKey::kSpace:
+      return soup::KEY_SPACE;
+    case ui::VirtualKey::kLShift:
+      return soup::KEY_LSHIFT;
+    case ui::VirtualKey::kRShift:
+      return soup::KEY_RSHIFT;
+    case ui::VirtualKey::kLControl:
+      return soup::KEY_LCTRL;
+    case ui::VirtualKey::kRControl:
+      return soup::KEY_RCTRL;
+    case ui::VirtualKey::kLMenu:
+      return soup::KEY_LALT;
+    case ui::VirtualKey::kRMenu:
+      return soup::KEY_RALT;
+    case ui::VirtualKey::kF1:
+      return soup::KEY_F1;
+    case ui::VirtualKey::kF2:
+      return soup::KEY_F2;
+    case ui::VirtualKey::kF3:
+      return soup::KEY_F3;
+    case ui::VirtualKey::kF4:
+      return soup::KEY_F4;
+    case ui::VirtualKey::kF5:
+      return soup::KEY_F5;
+    case ui::VirtualKey::kF6:
+      return soup::KEY_F6;
+    case ui::VirtualKey::kF7:
+      return soup::KEY_F7;
+    case ui::VirtualKey::kF8:
+      return soup::KEY_F8;
+    case ui::VirtualKey::kF9:
+      return soup::KEY_F9;
+    case ui::VirtualKey::kF10:
+      return soup::KEY_F10;
+    case ui::VirtualKey::kF11:
+      return soup::KEY_F11;
+    case ui::VirtualKey::kF12:
+      return soup::KEY_F12;
+    case ui::VirtualKey::kEscape:
+      return soup::KEY_ESCAPE;
+    case ui::VirtualKey::kTab:
+      return soup::KEY_TAB;
+    case ui::VirtualKey::kReturn:
+      return soup::KEY_ENTER;
+    case ui::VirtualKey::kBack:
+      return soup::KEY_BACKSPACE;
+    case ui::VirtualKey::kUp:
+      return soup::KEY_ARROW_UP;
+    case ui::VirtualKey::kDown:
+      return soup::KEY_ARROW_DOWN;
+    case ui::VirtualKey::kLeft:
+      return soup::KEY_ARROW_LEFT;
+    case ui::VirtualKey::kRight:
+      return soup::KEY_ARROW_RIGHT;
+    // Add more mappings as needed
+    default:
+      return soup::KEY_NONE;
+  }
+}
+
 X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
                                      X_INPUT_STATE* out_state) {
   if (!IsKeyboardForUserEnabled(user_index)) {
@@ -553,6 +714,10 @@ X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
   int weapon = 0;
 
   RawInputState state;
+
+
+
+  bool has_analog = HasAnalogKeyboard();
 
   if (window()->HasFocus() && is_active()) {
     {
@@ -602,38 +767,62 @@ X_RESULT WinKeyInputDriver::GetState(uint32_t user_index,
 
         buttons |= (binding & XINPUT_BUTTONS_MASK);
 
+                // Get analog value for this key
+        float analog_value = 0.0f;
+        bool use_analog = false;
+
+        if (has_analog) {
+          soup::Key soup_key = VirtualKeyToSoupKey(vk_key);
+          if (soup_key != soup::KEY_NONE) {
+            analog_value = GetAnalogValue(soup_key);
+            use_analog = (analog_value > 0.0f);
+          }
+        }
+
+        // Triggers with analog support
         if (binding & XINPUT_BIND_LEFT_TRIGGER) {
-          left_trigger = 0xFF;
+          left_trigger =
+              use_analog ? static_cast<uint8_t>(analog_value * 255.0f) : 0xFF;
         }
-
         if (binding & XINPUT_BIND_RIGHT_TRIGGER) {
-          right_trigger = 0xFF;
+          right_trigger =
+              use_analog ? static_cast<uint8_t>(analog_value * 255.0f) : 0xFF;
         }
 
+        // Left stick with analog support
         if (binding & XINPUT_BIND_LS_UP) {
-          thumb_ly = SHRT_MAX;
+          thumb_ly = use_analog ? static_cast<int16_t>(analog_value * SHRT_MAX)
+                                : SHRT_MAX;
         }
         if (binding & XINPUT_BIND_LS_DOWN) {
-          thumb_ly = SHRT_MIN;
+          thumb_ly = use_analog ? static_cast<int16_t>(-analog_value * SHRT_MAX)
+                                : SHRT_MIN;
         }
         if (binding & XINPUT_BIND_LS_LEFT) {
-          thumb_lx = SHRT_MIN;
+          thumb_lx = use_analog ? static_cast<int16_t>(-analog_value * SHRT_MAX)
+                                : SHRT_MIN;
         }
         if (binding & XINPUT_BIND_LS_RIGHT) {
-          thumb_lx = SHRT_MAX;
+          thumb_lx = use_analog ? static_cast<int16_t>(analog_value * SHRT_MAX)
+                                : SHRT_MAX;
         }
 
+        // Right stick with analog support
         if (binding & XINPUT_BIND_RS_UP) {
-          thumb_ry = SHRT_MAX;
+          thumb_ry = use_analog ? static_cast<int16_t>(analog_value * SHRT_MAX)
+                                : SHRT_MAX;
         }
         if (binding & XINPUT_BIND_RS_DOWN) {
-          thumb_ry = SHRT_MIN;
+          thumb_ry = use_analog ? static_cast<int16_t>(-analog_value * SHRT_MAX)
+                                : SHRT_MIN;
         }
         if (binding & XINPUT_BIND_RS_LEFT) {
-          thumb_rx = SHRT_MIN;
+          thumb_rx = use_analog ? static_cast<int16_t>(-analog_value * SHRT_MAX)
+                                : SHRT_MIN;
         }
         if (binding & XINPUT_BIND_RS_RIGHT) {
-          thumb_rx = SHRT_MAX;
+          thumb_rx = use_analog ? static_cast<int16_t>(analog_value * SHRT_MAX)
+                                : SHRT_MAX;
         }
 
         if (binding & XINPUT_BIND_MODIFIER) {

@@ -17,6 +17,7 @@
 #include "xenia/hid/input_driver.h"
 #include "xenia/hid/winkey/hookables/hookable_game.h"
 #include "xenia/ui/virtual_key.h"
+#include "third_party/soup/soup/AnalogueKeyboard.hpp"
 
 #define VK_BIND_MWHEELUP 0x0E
 #define VK_BIND_MWHEELDOWN 0x0F
@@ -75,6 +76,63 @@ namespace winkey {
 enum class KeyboardMode { Disabled, Enabled, Passthrough };
 
 class WinKeyInputDriver final : public InputDriver {
+ private:
+  // Add these members
+  std::thread analog_thread_;
+  std::atomic<bool> analog_running_{false};
+  std::mutex analog_mutex_;
+  std::vector<soup::AnalogueKeyboard> analog_keyboards_;
+  std::unordered_map<soup::Key, float>
+      analog_values_;  // Soup Key -> analog value
+  bool analog_keyboards_initialized_ = false;
+
+  // Helper methods
+  void InitializeAnalogKeyboards();
+  void UpdateAnalogKeyboards();
+  float GetAnalogValue(soup::Key soup_key);
+  bool HasAnalogKeyboard();
+  soup::Key VirtualKeyToSoupKey(ui::VirtualKey vk);
+
+    void StartAnalogThread() {
+    if (analog_running_) return;
+
+    analog_running_ = true;
+    analog_thread_ = std::thread([this]() {
+      using namespace soup;
+      analog_keyboards_ = AnalogueKeyboard::getAll(false);
+
+      while (analog_running_) {
+        std::unordered_map<soup::Key, float> new_values;
+
+        for (auto& kbd : analog_keyboards_) {
+          if (kbd.disconnected) continue;
+
+            auto keys =
+                kbd.getActiveKeys();
+            for (const auto& key : keys) {
+              new_values[key.getSoupKey()] = key.fvalue;
+            }
+
+        }
+
+
+        {
+          std::lock_guard<std::mutex> lock(analog_mutex_);
+          analog_values_ = std::move(new_values);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+  }
+
+  void StopAnalogThread() {
+    analog_running_ = false;
+    if (analog_thread_.joinable()) {
+      analog_thread_.join();
+    }
+  }
+
  public:
   explicit WinKeyInputDriver(xe::ui::Window* window, size_t window_z_order);
   ~WinKeyInputDriver() override;

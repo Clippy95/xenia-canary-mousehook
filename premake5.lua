@@ -206,6 +206,9 @@ filter("platforms:Windows")
     "/ignore:4006",  -- Ignores complaints about empty obj files.
     "/ignore:4221",
   })
+    libdirs({
+    "third_party/lib",
+  })
   links({
     "ntdll",
     "wsock32",
