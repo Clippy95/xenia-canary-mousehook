@@ -70,6 +70,10 @@ std::map<MinecraftGame::GameBuild, GameBuildAddrs> supported_builds{
      {"",   NULL, {},   NULL, NULL, NULL, NULL, {},   NULL, {},
       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
       NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {}}},
+    {MinecraftGame::GameBuild::TU4,
+     {"0.0.4.1", NULL, {},   NULL, NULL, NULL, NULL, {},   NULL, {},
+      NULL,      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      NULL,      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, {}}},
     {MinecraftGame::GameBuild::TU75, {"0.0.80.1", 0x82C8518C,
                                       {0x38},     0x148,
                                       0x14C,      0x82C84986,
@@ -86,7 +90,9 @@ std::map<MinecraftGame::GameBuild, GameBuildAddrs> supported_builds{
                                       0x25FC,     0x2600,
                                       0x82CCDB90, {0x34, 0x5F8, 0x6C}}}};
 std::map<std::string, GameVersion> supported_versions{
-    {"", {NULL, NULL, NULL, NULL}}, {"0.0.80.1", {0, 0, 80, 1}}};
+    {"", {NULL, NULL, NULL, NULL}},
+    {"0.0.4.1", {0, 0, 4, 1}},
+    {"0.0.80.1", {0, 0, 80, 1}}};
 
 bool MinecraftGame::IsGameSupported(GameVersion title_version) {
   auto title_id = kernel_state()->title_id();
@@ -125,6 +131,11 @@ bool MinecraftGame::IsGameSupported(GameVersion title_version) {
 
 bool MinecraftGame::DoHooks(uint32_t user_index, RawInputState& input_state,
                             X_INPUT_STATE* out_state) {
+  if (game_build_ == GameBuild::TU4) {
+    mouse_x_d += input_state.mouse.x_delta;
+    mouse_y_d += input_state.mouse.y_delta;
+    return false;
+  }
   XThread* current_thread = XThread::GetCurrentThread();
 
   if (!current_thread) {
@@ -295,6 +306,7 @@ void MinecraftGame::WeaponSwitchHandler(uint32_t user_index,
                                         RawInputState& input_state,
                                         X_INPUT_STATE* out_state, int weapon,
                                         uint16_t buttons) {
+  if (game_build_ == GameBuild::TU4) return;
   auto* hotbar_selection =
       multi_pointer(supported_builds[game_build_].hotbar_base_addr,
                     supported_builds[game_build_].hotbar_offsets);
@@ -320,8 +332,20 @@ void MinecraftGame::WeaponSwitchHandler(uint32_t user_index,
     }
   }
 }
+
+void mousemidhook_MCTU4(PPCContext* context, void* arg0, void* arg1) {
+  context->f[10] += (mouse_x_d / 5.f);
+  context->f[11] += (mouse_y_d / 5.f);
+  mouse_x_d = 0;
+  mouse_y_d = 0;
+}
+
 void MinecraftGame::MidHookInit() {
+  if (game_build_ != GameBuild::TU4) return;
   if (midhook_status == HOOKED) return;
+
+  xe::cpu::ppc::RegisterMidHookASM(0x8251A3C0, mousemidhook_MCTU4);
+  midhook_status = HOOKED;
 }
 }  // namespace winkey
 }  // namespace hid

@@ -15,10 +15,11 @@
 namespace xe {
 namespace hid {
 namespace winkey {
-
+static int32_t mouse_x_d;
+static int32_t mouse_y_d;
 class MinecraftGame : public HookableGame {
  public:
-  enum class GameBuild { Unknown, TU75 };
+  enum class GameBuild { Unknown, TU4, TU75 };
 
   ~MinecraftGame() override;
 
