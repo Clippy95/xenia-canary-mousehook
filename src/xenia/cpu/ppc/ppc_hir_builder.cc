@@ -172,6 +172,11 @@ bool PPCHIRBuilder::Emit(GuestFunction* function, uint32_t flags) {
       ContextBarrier();
     }
 
+    if (address == start_address && HasFunctionHookAt(address)) {
+      CallExtern(frontend_->GetOrCreateFunctionHookBuiltin(address));
+      ReturnTrue(LoadContext(offsetof(PPCContext, scratch), INT64_TYPE));
+    }
+
     if (g_AddressHooks.count(address)) {
       CallExtern(frontend_->GetOrCreateMidHookBuiltin(address));
     }
