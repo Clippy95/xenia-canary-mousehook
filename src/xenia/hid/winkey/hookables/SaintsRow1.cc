@@ -11,6 +11,7 @@
 
 #include "xenia/hid/winkey/hookables/SaintsRow1.h"
 
+#include "xenia/kernel/user_module.h"
 #include "xenia/base/platform_win.h"
 #include "xenia/cpu/processor.h"
 #include "xenia/emulator.h"
@@ -20,6 +21,7 @@
 #include "xenia/kernel/xmodule.h"
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
+#include <xenia/game_launch_hooks.h>
 
 using namespace xe::kernel;
 
@@ -151,11 +153,22 @@ float SaintsRow1Game::DegreetoRadians(float degree) {
 float SaintsRow1Game::RadianstoDegree(float radians) {
   return (float)(radians * (180 / M_PI));
 }
+static int32_t sr1_mouse_x;
+static int32_t sr1_mouse_y;
+static int32_t sr1_mouse_delta;
+static bool bisMapCursor_HACK;
 bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
                              X_INPUT_STATE* out_state) {
   if (supported_builds.count(game_build_) == 0) {
     return false;
   }
+  
+  if (cvars::internal_hook) {
+    sr1_mouse_x += input_state.mouse.x_delta;
+    sr1_mouse_y += input_state.mouse.y_delta;
+    sr1_mouse_delta += input_state.mouse.wheel_delta;
+  }
+
   // xtbl edits can't be made into a patch most likely?
   xe::be<float>* ingamesens_x =
       kernel_memory()->TranslateVirtual<xe::be<float>*>(
@@ -199,6 +212,7 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
                        now - last_movement_time_y_)
                        .count();
 
+  if (!bisMapCursor_HACK)
   if (!(isTervelPlugin() && inFirstPerson()) && !inMapScreen() &&
       !(canspinplayer && isPaused())) {
     // Declare static variables for last deltas
@@ -248,7 +262,7 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
       supported_builds[game_build_].player_address);
 
   if (isPaused()) {
-    if (inMapScreen()) MapCursor(input_state);
+    if (inMapScreen() && !bisMapCursor_HACK) MapCursor(input_state);
     if (*kernel_memory()->TranslateVirtual<uint8_t*>(
             supported_builds[game_build_].world_paused_address) != 0) {
       return false;
@@ -308,7 +322,9 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
     *addition_x = DegreetoRadians(degree_x);
   else if (fine_aim_x != NULL && (isTervelPlugin() && inFirstPerson()))
     *fine_aim_x = DegreetoRadians(degree_x);
-  mouse_x_ld += input_state.mouse.x_delta;
+  if (cvars::internal_hook) {
+    mouse_x_ld += input_state.mouse.x_delta;
+  }
   float delta_y =
       (input_state.mouse.y_delta / divider_y) * (float)cvars::sensitivity;
 
@@ -325,7 +341,7 @@ bool SaintsRow1Game::DoHooks(uint32_t user_index, RawInputState& input_state,
     degree_y = std::clamp(degree_y, -90.f, 90.f);
     *fine_aim_y = DegreetoRadians(degree_y);
   }
-
+  if (bisMapCursor_HACK) bisMapCursor_HACK = false;
   return true;
 }
 
@@ -771,6 +787,66 @@ void x_addition_hook(PPCContext* context, void* arg0, void* arg1) {
   mouse_x_ld = 0;
 }
 
+void map_hook_1(PPCContext* context, void* arg0, void* arg1) {
+  if (cvars::internal_hook == false || !SaintsRow1Game::current_instance_)
+    return;
+  bisMapCursor_HACK = true;
+  XELOGI("OI {} {}", sr1_mouse_x, sr1_mouse_y);
+    xe::be<float>* map_x_be = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+      supported_builds[SaintsRow1Game::current_instance_->game_build_]
+          .map_x_address);
+
+  xe::be<float>* map_y_be = kernel_memory()->TranslateVirtual<xe::be<float>*>(
+        supported_builds[SaintsRow1Game::current_instance_->game_build_]
+            .map_x_address +
+        0x4);
+
+  xe::be<float>* map_zoom_be =
+      kernel_memory()->TranslateVirtual<xe::be<float>*>(
+          supported_builds[SaintsRow1Game::current_instance_->game_build_]
+              .map_zoom_address);
+
+  float map_x = *map_x_be;
+
+  float map_y = *map_y_be;
+
+  float map_zoom = *map_zoom_be;
+
+  // 3.75 * 0.2 = 0.75 when zoomed out the farthest game allows.
+  map_x -= (sr1_mouse_x / (3.75f * map_zoom)) *
+           (float)cvars::menu_sensitivity;
+
+  map_y -= (sr1_mouse_y / (3.75f * map_zoom)) *
+           (float)cvars::menu_sensitivity;
+
+  if (!cvars::swap_wheel)
+    map_zoom += (sr1_mouse_delta / (1000.f / map_zoom));
+  else
+    map_zoom -= (sr1_mouse_delta / (1000.f / map_zoom));
+  map_x = std::clamp(map_x, -1677.760498f, 1677.760498f);
+  map_y = std::clamp(map_y, -2245.578369f, 2245.578369f);
+
+  // game default clamping is between 0.2 and 1, the game does allow to write
+  // outside of those, so I set the minimum a bit lower as that feels more
+  // natural with a mouse?
+  map_zoom = std::clamp(map_zoom, 0.1f, 2.5f);
+
+  *map_x_be = map_x;
+  *map_y_be = map_y;
+  *map_zoom_be = map_zoom;
+
+  }
+
+void sr1_mouse_clear(PPCContext* context, void* arg0, void* arg1)
+{
+    static bool clear = true;
+  XELOGI("CLEARING AT {}", fmt::ptr(&clear));
+  if (!clear) return;
+    sr1_mouse_y = 0;
+    sr1_mouse_delta = 0;
+    sr1_mouse_x = 0;
+  }
+
 void SaintsRow1Game::MidHookInit() {
   if (midhook_status == HOOKED || !cvars::internal_hook) return;
   SaintsRow1Game::current_instance_ = this;
@@ -782,9 +858,37 @@ void SaintsRow1Game::MidHookInit() {
       supported_builds[game_build_].radian_x_axis_midhook_addr1,
       x_addition_hook);
 
+  //auto pattern = guest_pattern(
+  //    "7D 88 02 A6 91 81 ? ? FB E1 ? ? 94 21 ? ? 7C 7F 1B 78 2F 1F ? ? ? ? ? ? ? ? ? ? 39 7F");
+  //if (!pattern.empty())
+  //{
+  //  //xe::cpu::ppc::RegisterMidHookASM(pattern.get_first(0x104), sr1_mouse_clear);
+  //  xe::cpu::ppc::RegisterMidHookASM(0x821971F0, sr1_mouse_clear);
+  //  pattern = guest_pattern(
+  //      "3B C0 00 00 ? ? ? ? ? ? ? ? ? ? ? ? 89 7F ? ? ? ? ? ? ? ? ? ? 83 BC");
+  //  if(!pattern.empty())
+  //    xe::cpu::ppc::RegisterMidHookASM(pattern.get_first(), map_hook_1);
+  //}
+
   midhook_status = HOOKED;
 }
-
+//struct SR1LaunchHook {
+//  SR1LaunchHook() {
+//    xe::GameLaunchHooks::OnPreLaunch().AddListener(
+//        [](xe::kernel::UserModule* module) {
+//          if (!cvars::internal_hook) {
+//            return;
+//          }
+//          auto title_id = module->title_id();
+//          if (title_id != kTitleIdSaintsRow1JP &&
+//              title_id != kTitleIdSaintsRow1Global) {
+//            return;
+//          }
+//
+//
+//        });
+//  }
+//};
 }  // namespace winkey
 }  // namespace hid
 }  // namespace xe
