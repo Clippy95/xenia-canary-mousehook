@@ -105,19 +105,7 @@ static bool bypass_conditions = false;
 static bool bool_scanned = false;
 static bool valid_game = true;
 bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
-  if (cvars::internal_hook && !bool_scanned) {
-  
-      auto pattern = guest_pattern(
-        "7D 88 02 A6 ? ? ? ? DB E1 ? ? 94 21 ? ? 81 63 ? ? 7C 7F 1B 78 7C 9E "
-        "23 78 FF E0 08 90 55 6A 02 94");
-      if (!pattern.empty())
-      {
-        valid_game = true;
-    }
-      bool_scanned = true;
-  }
 
-  if (valid_game) return true;
 
   if (kernel_state()->title_id() != kTitleIdGearsOfWars3 &&
       kernel_state()->title_id() != kTitleIdGearsOfWars2 &&
@@ -126,6 +114,19 @@ bool GearsOfWarsGame::IsGameSupported(GameVersion title_version) {
       kernel_state()->title_id() != kTitleIdSection8) {
     return false;
   }
+
+    if (cvars::internal_hook && !bool_scanned) {
+    auto pattern = guest_pattern(
+        "7D 88 02 A6 ? ? ? ? DB E1 ? ? 94 21 ? ? 81 63 ? ? 7C 7F 1B 78 7C 9E "
+        "23 78 FF E0 08 90 55 6A 02 94");
+    if (!pattern.empty()) {
+      valid_game = true;
+    }
+    bool_scanned = true;
+  }
+
+  if (valid_game) return true;
+
   uint32_t title_id = kernel_state()->title_id();
   const std::string current_version =
       kernel_state()->emulator()->title_version();
