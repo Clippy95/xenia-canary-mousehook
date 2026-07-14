@@ -277,7 +277,7 @@ class FunctionHook final : public FunctionHookBase {
       : FunctionHookBase(address), handler_(std::move(handler)) {}
 
   void Invoke(PPCContext* context) override {
-    context->scratch = 0;
+    context->function_hook_handled = 0;
     if (IsFunctionHookBypassed(address())) {
       return;
     }
@@ -291,7 +291,7 @@ class FunctionHook final : public FunctionHookBase {
             handler_(hook_context, unpacked...);
           },
           args);
-      context->scratch = 1;
+      context->function_hook_handled = 1;
     } else {
       auto result = std::apply(
           [&](HookTypeT<Args>... unpacked) {
@@ -299,7 +299,7 @@ class FunctionHook final : public FunctionHookBase {
           },
           args);
       WriteHookReturn(context, result);
-      context->scratch = 1;
+      context->function_hook_handled = 1;
     }
   }
 

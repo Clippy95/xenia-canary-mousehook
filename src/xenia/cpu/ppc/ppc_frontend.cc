@@ -71,7 +71,7 @@ bool HasMidHookAt(uint32_t address) {
 void FunctionHookBuiltin(PPCContext* ppc_context, void* arg0, void* arg1) {
   auto address = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arg0));
   auto it = g_FunctionHooks.find(address);
-  ppc_context->scratch = 0;
+  ppc_context->function_hook_handled = 0;
   if (it == g_FunctionHooks.end()) {
     return;
   }
