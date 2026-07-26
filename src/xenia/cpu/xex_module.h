@@ -265,6 +265,12 @@ class XexModule : public xe::cpu::Module {
       import_libs_;  // pre-loaded import libraries for ease of use
   std::vector<PESection> pe_sections_;
 
+  struct AddressRange {
+    uint32_t start_address;
+    uint32_t end_address;
+  };
+  std::vector<AddressRange> plugin_data_executable_ranges_;
+
   // XEX_HEADER_ALTERNATE_TITLE_IDS loaded into a safe std::vector
   std::vector<uint32_t> opt_alternate_title_ids_;
 

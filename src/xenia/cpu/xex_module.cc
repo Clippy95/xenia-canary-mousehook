@@ -41,6 +41,11 @@ DEFINE_bool(writable_code_segments, false,
             "CPU");
 
 DEFINE_bool(
+    allows_plugins_data, false,
+    "Allows plugins to place JIT-translated PPC code in XEX data sections.",
+    "CPU");
+
+DEFINE_bool(
     enable_early_precompilation, false,
     "Enable pre-compiling guest functions that we know we've called/that "
     "we've recognized as being functions via simple heuristics, good for error "
@@ -1007,8 +1012,11 @@ bool XexModule::LoadContinue() {
 
   low_address_ = UINT_MAX;
   high_address_ = 0;
+  plugin_data_executable_ranges_.clear();
 
   auto sec_header = xex_security_info();
+  const bool allow_plugin_data_code =
+      cvars::allow_plugins && cvars::allows_plugins_data;
   for (uint32_t i = 0, page = 0; i < sec_header->page_descriptor_count; i++) {
     // Byteswap the bitfield manually.
     xex2_page_descriptor desc;
@@ -1019,6 +1027,8 @@ bool XexModule::LoadContinue() {
     if (desc.info == XEX_SECTION_CODE) {
       low_address_ = std::min(low_address_, start_address);
       high_address_ = std::max(high_address_, end_address);
+    } else if (allow_plugin_data_code && desc.info == XEX_SECTION_DATA) {
+      plugin_data_executable_ranges_.push_back({start_address, end_address});
     }
 
     page += desc.page_count;
@@ -1026,6 +1036,10 @@ bool XexModule::LoadContinue() {
 
   // Notify backend that we have an executable range.
   processor_->backend()->CommitExecutableRange(low_address_, high_address_);
+  for (const auto& range : plugin_data_executable_ranges_) {
+    processor_->backend()->CommitExecutableRange(range.start_address,
+                                                 range.end_address);
+  }
 
   // Add all imports (variables/functions).
   xex2_opt_import_libraries* opt_import_libraries = nullptr;
@@ -1347,7 +1361,15 @@ bool XexModule::SetupLibraryImports(const std::string_view name,
 }
 
 bool XexModule::ContainsAddress(uint32_t address) {
-  return address >= low_address_ && address < high_address_;
+  if (address >= low_address_ && address < high_address_) {
+    return true;
+  }
+  for (const auto& range : plugin_data_executable_ranges_) {
+    if (address >= range.start_address && address < range.end_address) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::unique_ptr<Function> XexModule::CreateFunction(uint32_t address) {
